@@ -18,9 +18,9 @@ use std::path::Path;
 
 use assistant_agent_graph::{
     collect_result, create_specialist, route_handoff, route_result, start_job, store,
-    transition_job, A2aAcl, HandoffPacket, JobBudget, JobEvent, JobStatus, RegisteredProfile,
-    ReturnPath, SpecialistJob, SpecialistRegistry, SpecialistResult, SpecialistStatus, VecAuditSink,
-    RESULT_KIND,
+    transition_job, A2aAcl, HandoffPacket, JobBudget, JobEvent, JobStatus, ProfileLimits,
+    RegisteredProfile, ReturnPath, SpecialistJob, SpecialistRegistry, SpecialistResult,
+    SpecialistStatus, VecAuditSink, RESULT_KIND,
 };
 use assistant_cli::{setup, BootstrapRequest};
 use assistant_config::InstanceLayout;
@@ -41,7 +41,6 @@ use assistant_session::{
     current_outbound_compat, enqueue_inbound, read_outbound, InboundMessage, LocalControl,
     OutboundMessage, SessionLayout,
 };
-use assistant_specialist_browser::{BrowserSpecialistProfile, NetworkPolicy, BROWSER_PROFILE_ID};
 use assistant_web::{
     ApprovalView, CapabilityView, GroupView, Overview, OverviewCounts, QueueItem,
     ReadinessReportView, RunDetail, ScheduledItem, SessionView, SpecialistStatusView, UserView,
@@ -327,14 +326,13 @@ pub fn scheduled_items(conn: &Connection, agent_group_id: i64) -> Vec<ProjectedI
 
 // --- Agent graph: the browser specialist ------------------------------------
 
-/// The host-owned browser profile, allow-listed to `example.com`.
-pub fn browser_profile() -> BrowserSpecialistProfile {
-    BrowserSpecialistProfile::new(NetworkPolicy::allowlist(["example.com"]))
-}
+const STUB_PROFILE_ID: &str = "browser-specialist";
 
-/// The browser profile bridged into the agent graph as plain registry data.
+/// A stand-in browser profile bridged into the agent graph as plain registry
+/// data. These offline tests assert only DB provenance, so a well-formed
+/// registry entry is enough — no real browser crate dependency required.
 pub fn browser_registered() -> RegisteredProfile {
-    browser_profile().registered_profile()
+    RegisteredProfile::specialist(STUB_PROFILE_ID, "0.1.0", ProfileLimits::new(1, 8))
 }
 
 /// Run a full browser delegation: register the profile, create the specialist
@@ -355,7 +353,7 @@ pub fn delegate_browser(
     reg.register(browser_registered());
 
     let specialist_group = "browser-1";
-    create_specialist(conn, &reg, &mut audit, BROWSER_PROFILE_ID, specialist_group).unwrap();
+    create_specialist(conn, &reg, &mut audit, STUB_PROFILE_ID, specialist_group).unwrap();
 
     let orch_layout = SessionLayout::derive(sessions_base, orchestrator_group, "sess-1").unwrap();
     let spec_layout = SessionLayout::derive(sessions_base, specialist_group, job_id).unwrap();
@@ -369,7 +367,7 @@ pub fn delegate_browser(
         job_id,
         orchestrator_group,
         specialist_group,
-        BROWSER_PROFILE_ID,
+        STUB_PROFILE_ID,
         JobBudget {
             max_tokens: Some(2000),
             max_wall_secs: Some(120),

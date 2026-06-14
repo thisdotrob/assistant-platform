@@ -111,7 +111,6 @@ dependencies = [
  "assistant-scheduler",
  "assistant-session",
  "assistant-setup",
- "assistant-specialist-browser",
  "assistant-upgrade",
  "assistant-web",
  "rusqlite",
@@ -162,7 +161,6 @@ dependencies = [
  "assistant-scheduler",
  "assistant-session",
  "assistant-setup",
- "assistant-specialist-browser",
  "assistant-specialist-spec",
  "libc",
  "rusqlite",
@@ -248,17 +246,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
-]
-
-[[package]]
-name = "assistant-specialist-browser"
-version = "0.1.0"
-dependencies = [
- "assistant-agent-graph",
- "assistant-capabilities",
- "assistant-core",
- "assistant-specialist-spec",
- "serde",
 ]
 
 [[package]]

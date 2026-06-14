@@ -21,7 +21,7 @@ use assistant_db::{apply, baseline_migrations, baseline_owner_modules, open_cent
 use assistant_host::{
     serve_slack, EngagementMode, HostConfig, SchedulerTickConfig, SlackServeOptions, UnknownPolicy,
 };
-use assistant_specialist_browser::{browser_specialist_spec, NetworkPolicy, BROWSER_PROFILE_ID};
+use assistant_specialist_spec::SpecialistSpec;
 use assistant_permissions::{add_user_dm, create_user};
 use assistant_router::{count_drops_by_reason, DropReason};
 use assistant_scheduler::{
@@ -33,6 +33,36 @@ use assistant_session::{
     init_session, session_exists, verify_sequence_parity, FakeContainer, LocalControl,
     SessionLayout,
 };
+
+/// Profile id the delegation tests register and key their provenance assertions
+/// on. Mirrors the real browser specialist's profile id ("browser-specialist");
+/// the fake delegate payloads route on the spec's `route_name` ("browser").
+const STUB_PROFILE_ID: &str = "browser-specialist";
+
+/// A well-formed specialist spec for the offline delegation tests. The serve loop
+/// runs on `FakeRuntime` and never launches a real specialist, so the tests build
+/// a spec locally rather than depending on the out-of-tree browser specialist
+/// crate; the structural fields (route/profile/group/limits) mirror that spec.
+fn stub_specialist_spec() -> SpecialistSpec {
+    SpecialistSpec {
+        route_name: "browser".to_string(),
+        description: "browses the web and reads live pages".to_string(),
+        profile_id: STUB_PROFILE_ID.to_string(),
+        profile_version: "0.1.0".to_string(),
+        group_slug: "browser-1".to_string(),
+        image_repository: "assistant-specialist-browser".to_string(),
+        image_tag: "0.1.0".to_string(),
+        image_digest: None,
+        max_specialists: 1,
+        max_concurrent_jobs: 8,
+        max_artifact_bytes: 50 * 1024 * 1024,
+        system_prompt: "You are a web browsing specialist.".to_string(),
+        tools: vec!["Bash".to_string()],
+        allowed_tools: vec!["Bash(agent-browser:*)".to_string()],
+        max_turns: 40,
+        extra_env: Vec::new(),
+    }
+}
 
 /// Recorded `chat.postMessage` calls: `(channel, thread_ts, text)`.
 type Posts = Rc<RefCell<Vec<(String, Option<String>, String)>>>;
@@ -1286,7 +1316,7 @@ fn a_delegate_action_runs_a_specialist_and_re_injects_its_result() {
     };
 
     let mut opts = test_opts(sessions.clone(), central.clone());
-    opts.specialists = vec![browser_specialist_spec(NetworkPolicy::open())];
+    opts.specialists = vec![stub_specialist_spec()];
 
     let stop = {
         let stop_flag = stop_flag.clone();
@@ -1322,12 +1352,12 @@ fn a_delegate_action_runs_a_specialist_and_re_injects_its_result() {
     // job ran to terminal success (none left queued/running).
     let conn = open_central(&central).unwrap();
     assert_eq!(
-        store::specialist_group_count(&conn, BROWSER_PROFILE_ID).unwrap(),
+        store::specialist_group_count(&conn, STUB_PROFILE_ID).unwrap(),
         1,
         "the browser specialist group was created once"
     );
     assert_eq!(
-        store::running_or_queued_job_count(&conn, BROWSER_PROFILE_ID).unwrap(),
+        store::running_or_queued_job_count(&conn, STUB_PROFILE_ID).unwrap(),
         0,
         "the delegated job is no longer in flight"
     );
@@ -1392,7 +1422,7 @@ fn a_delegate_to_an_unknown_specialist_is_reported_and_runs_no_job() {
     };
 
     let mut opts = test_opts(sessions.clone(), central.clone());
-    opts.specialists = vec![browser_specialist_spec(NetworkPolicy::open())];
+    opts.specialists = vec![stub_specialist_spec()];
 
     let stop = {
         let stop_flag = stop_flag.clone();
@@ -1417,7 +1447,7 @@ fn a_delegate_to_an_unknown_specialist_is_reported_and_runs_no_job() {
     // before either was opened.
     let conn = open_central(&central).unwrap();
     assert_eq!(
-        store::specialist_group_count(&conn, BROWSER_PROFILE_ID).unwrap(),
+        store::specialist_group_count(&conn, STUB_PROFILE_ID).unwrap(),
         0,
         "no specialist group is created for an unknown specialist"
     );
@@ -1490,7 +1520,7 @@ fn a_second_inbound_is_handled_while_a_specialist_is_in_flight() {
     };
 
     let mut opts = test_opts(sessions.clone(), central.clone());
-    opts.specialists = vec![browser_specialist_spec(NetworkPolicy::open())];
+    opts.specialists = vec![stub_specialist_spec()];
 
     // Stop on `exhausted` alone: the second `open()` flips it, ending the run after
     // both frames are consumed. (No `on_post` stop — on_post is the gate release.)
@@ -1526,7 +1556,7 @@ fn a_second_inbound_is_handled_while_a_specialist_is_in_flight() {
     // The delegated job still ran to terminal success with its provenance link.
     let conn = open_central(&central).unwrap();
     assert_eq!(
-        store::running_or_queued_job_count(&conn, BROWSER_PROFILE_ID).unwrap(),
+        store::running_or_queued_job_count(&conn, STUB_PROFILE_ID).unwrap(),
         0,
         "the delegated job is no longer in flight after the drain"
     );
@@ -1608,7 +1638,7 @@ fn many_specialists_run_concurrently_up_to_the_cap() {
     };
 
     let mut opts = test_opts(sessions.clone(), central.clone());
-    opts.specialists = vec![browser_specialist_spec(NetworkPolicy::open())];
+    opts.specialists = vec![stub_specialist_spec()];
 
     // Stop once the frames drain and the second open() flips `exhausted`; the
     // shutdown drain joins all workers and delivers every follow-up.
@@ -1643,12 +1673,12 @@ fn many_specialists_run_concurrently_up_to_the_cap() {
     // in flight.
     let conn = open_central(&central).unwrap();
     assert_eq!(
-        store::specialist_group_count(&conn, BROWSER_PROFILE_ID).unwrap(),
+        store::specialist_group_count(&conn, STUB_PROFILE_ID).unwrap(),
         1,
         "the single browser specialist group is reused across all jobs"
     );
     assert_eq!(
-        store::running_or_queued_job_count(&conn, BROWSER_PROFILE_ID).unwrap(),
+        store::running_or_queued_job_count(&conn, STUB_PROFILE_ID).unwrap(),
         0,
         "no job is left in flight after the drain"
     );
@@ -1731,7 +1761,7 @@ fn a_delegation_past_the_concurrency_cap_is_rejected() {
     };
 
     let mut opts = test_opts(sessions.clone(), central.clone());
-    opts.specialists = vec![browser_specialist_spec(NetworkPolicy::open())];
+    opts.specialists = vec![stub_specialist_spec()];
 
     let stop = {
         let exhausted = exhausted.clone();
@@ -1771,7 +1801,7 @@ fn a_delegation_past_the_concurrency_cap_is_rejected() {
         "the over-cap delegation created no job row"
     );
     assert_eq!(
-        store::running_or_queued_job_count(&conn, BROWSER_PROFILE_ID).unwrap(),
+        store::running_or_queued_job_count(&conn, STUB_PROFILE_ID).unwrap(),
         0,
         "no job is left in flight after the drain"
     );

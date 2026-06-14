@@ -469,7 +469,7 @@ then carries that memory in its inbound `metadata` — both the `<retrieved_memo
 block and the hydrated note body text — proving the full write → catalog →
 hydrated-injection loop offline. Delegation is covered on the same harness over a
 central DB carrying the agent-graph job migrations and with a registered
-`SpecialistSpec` (the test imports the browser spec to exercise the generic seam
+`SpecialistSpec` (the test uses an inline stub spec to exercise the generic seam
 end to end): a turn whose shim emits a `delegate(<route>, …)` action runs a
 specialist sub-agent in its own job-keyed session under the spec's group (served
 by a watcher that polls the group dir for the runtime-minted job id), and its

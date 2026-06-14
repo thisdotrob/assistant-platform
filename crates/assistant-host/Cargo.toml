@@ -52,9 +52,3 @@ socket-mode = ["assistant-channel-slack/socket-mode", "dep:libc"]
 
 [dev-dependencies]
 tempfile = "3.27.0"
-# Test-only: the serve-slack delegation integration test registers the real
-# browser spec to exercise the generic specialist seam end to end. Not a runtime
-# dependency — products supply specs; the host stays specialist-agnostic. The
-# browser specialist lives in its own sibling repo, so the path reaches up out of
-# the platform workspace.
-assistant-specialist-browser = { path = "../../../assistant-specialist-browser" }

@@ -24,9 +24,6 @@ assistant-permissions = { path = "../assistant-permissions" }
 assistant-memory = { path = "../assistant-memory" }
 assistant-scheduler = { path = "../assistant-scheduler" }
 assistant-agent-graph = { path = "../assistant-agent-graph" }
-# Test-only: the bootstrap harness drives a real browser delegation to exercise
-# the seam. The browser specialist now lives in its own sibling repo.
-assistant-specialist-browser = { path = "../../../assistant-specialist-browser" }
 assistant-runtime-docker = { path = "../assistant-runtime-docker" }
 assistant-web = { path = "../assistant-web" }
 assistant-channel-telegram = { path = "../assistant-channel-telegram" }
