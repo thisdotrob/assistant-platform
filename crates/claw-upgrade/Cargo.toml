@@ -1,0 +1,18 @@
+[package]
+name = "claw-upgrade"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+claw-core = { path = "../claw-core" }
+claw-config = { path = "../claw-config" }
+claw-db = { path = "../claw-db" }
+claw-session = { path = "../claw-session" }
+
+[dev-dependencies]
+tempfile = "3.27.0"

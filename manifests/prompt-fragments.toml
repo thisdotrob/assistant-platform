@@ -1,0 +1,86 @@
+# Shared platform prompt-fragment manifest.
+# Only platform-owned shared fragments live here; product crates parameterize
+# and assemble these but must not copy or weaken them.
+# Validator rule: a fragment's `order` must be strictly greater than the
+# `order` of every fragment it depends on. Fragment IDs are unique; no cycles.
+
+[[fragment]]
+id = "shared-safety"
+owner_module = "claw-agent-protocol"
+version = "0.1.0"
+target_agent_kind = "orchestrator"
+order = 10
+parameters = []
+override_rules = "Owned by the platform. Product crates may not remove, reorder, or weaken this fragment; they may only append stricter constraints."
+conformance_assertions = [
+  "safety fragment appears exactly once in every assembled prompt",
+  "product crates cannot weaken or remove it",
+]
+
+[[fragment]]
+id = "output-protocol"
+owner_module = "claw-agent-protocol"
+version = "0.1.0"
+target_agent_kind = "orchestrator"
+order = 20
+parameters = ["channel_kind"]
+depends_on = ["shared-safety"]
+override_rules = "Defines typed outbound action and final-text fallback formatting; products may extend examples but not change the wire contract."
+conformance_assertions = [
+  "typed outbound actions parse against the agent-protocol envelope schema",
+  "final-text fallback is emitted when no typed action is produced",
+]
+
+[[fragment]]
+id = "specialist-output-protocol"
+owner_module = "claw-agent-protocol"
+version = "0.1.0"
+target_agent_kind = "specialist"
+order = 25
+depends_on = ["shared-safety"]
+override_rules = "Specialist variant of the output protocol; constrains agent-to-agent result envelopes."
+conformance_assertions = [
+  "specialist results parse against the agent-protocol envelope schema",
+]
+
+[[fragment]]
+id = "approval-policy"
+owner_module = "claw-approvals"
+version = "0.1.0"
+target_agent_kind = "orchestrator"
+order = 30
+parameters = ["approval_card_style"]
+depends_on = ["shared-safety", "output-protocol"]
+override_rules = "Owned by claw-approvals; describes when to request approval and how to render approval cards. Products may tighten thresholds, not loosen them."
+conformance_assertions = [
+  "high-impact actions request approval before execution",
+  "approval requests match the pending-approval response contract",
+]
+
+[[fragment]]
+id = "scheduling-wording"
+owner_module = "claw-scheduler"
+version = "0.1.0"
+target_agent_kind = "orchestrator"
+order = 40
+parameters = ["timezone"]
+depends_on = ["output-protocol"]
+override_rules = "Owned by claw-scheduler; standardizes one-off and recurring scheduling language and pause/resume/cancel phrasing."
+conformance_assertions = [
+  "scheduled-work phrasing maps to scheduler lifecycle verbs",
+  "recurrence descriptions are unambiguous about timezone",
+]
+
+[[fragment]]
+id = "rag-injection"
+owner_module = "claw-memory"
+version = "0.1.0"
+target_agent_kind = "orchestrator"
+order = 50
+parameters = ["memory_namespace", "max_snippets"]
+depends_on = ["shared-safety", "output-protocol"]
+override_rules = "Owned by claw-memory; defines pre-reply RAG block placement and citation. Product crates supply the memory taxonomy, not the injection mechanics."
+conformance_assertions = [
+  "retrieved memory snippets are injected before the reply turn",
+  "injected snippets are bounded by max_snippets",
+]

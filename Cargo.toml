@@ -1,0 +1,33 @@
+[workspace]
+members = [
+  "crates/claw-agent-graph",
+  "crates/claw-agent-protocol",
+  "crates/claw-approvals",
+  "crates/claw-capabilities",
+  "crates/claw-channel-cli",
+  "crates/claw-channel-slack",
+  "crates/claw-channel-telegram",
+  "crates/claw-cli",
+  "crates/claw-config",
+  "crates/claw-core",
+  "crates/claw-db",
+  "crates/claw-host",
+  "crates/claw-memory",
+  "crates/claw-permissions",
+  "crates/claw-router",
+  "crates/claw-runtime-docker",
+  "crates/claw-scheduler",
+  "crates/claw-session",
+  "crates/claw-setup",
+  "crates/claw-specialist-spec",
+  "crates/claw-upgrade",
+  "crates/claw-web",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+

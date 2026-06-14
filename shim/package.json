@@ -1,0 +1,17 @@
+{
+  "name": "claw-agent-base",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "claw-platform agent container runner: session DB protocol + Claude turn",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --experimental-sqlite src/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "latest",
+    "zod": "^4.0.0"
+  }
+}

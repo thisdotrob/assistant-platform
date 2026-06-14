@@ -1,0 +1,16 @@
+[package]
+name = "claw-channel-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+claw-router = { path = "../claw-router" }
+claw-session = { path = "../claw-session" }
+
+[dev-dependencies]
+tempfile = "3.27.0"
