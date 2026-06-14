@@ -244,7 +244,7 @@ mod tests {
 
     fn platform_manifest() -> PlatformManifest {
         PlatformManifest {
-            platform_id: "claw-platform".to_string(),
+            platform_id: "assistant-platform".to_string(),
             platform_version: "0.1.0".to_string(),
             runner_protocol_version: "0.1.0".to_string(),
             generated_manifest_schema_version: "0.1.0".to_string(),
@@ -403,7 +403,7 @@ enabled_modules = []
 ";
 
     fn platform_root() -> PathBuf {
-        // .../crates/claw-upgrade -> .../crates -> .../claw-platform
+        // .../crates/claw-upgrade -> .../crates -> .../assistant-platform
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()

@@ -3,7 +3,7 @@
 //! Specialists may only be created from profiles registered ahead of time — the
 //! freeform `create_agent` of v1 is replaced by a constrained registry. Profiles
 //! are supplied to this crate as plain data by the host (capability modules like
-//! `claw-specialist-browser` own the real profile; the host translates its
+//! `assistant-specialist-browser` own the real profile; the host translates its
 //! identity and limits into a [`RegisteredProfile`]). This keeps the agent graph
 //! free of any dependency on concrete specialist crates.
 

@@ -57,4 +57,4 @@ tempfile = "3.27.0"
 # dependency — products supply specs; the host stays specialist-agnostic. The
 # browser specialist lives in its own sibling repo, so the path reaches up out of
 # the platform workspace.
-claw-specialist-browser = { path = "../../../claw-specialist-browser" }
+assistant-specialist-browser = { path = "../../../assistant-specialist-browser" }

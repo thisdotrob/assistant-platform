@@ -1,4 +1,4 @@
-//! Integration test that validates the actual checked-in claw-platform
+//! Integration test that validates the actual checked-in assistant-platform
 //! artifacts: the platform release manifest, the prompt-fragment manifest, and
 //! the module contracts. It proves the platform's own files are internally
 //! consistent (acyclic graph, valid fragment ordering, full contract coverage).

@@ -5,7 +5,7 @@
 //!
 //! The crate stays free of any dependency on concrete specialist crates: the
 //! host supplies specialist identity and limits as plain [`registry::RegisteredProfile`]
-//! data, so the graph never links `claw-capabilities` or `claw-specialist-browser`.
+//! data, so the graph never links `claw-capabilities` or `assistant-specialist-browser`.
 
 pub mod audit;
 pub mod delegation;

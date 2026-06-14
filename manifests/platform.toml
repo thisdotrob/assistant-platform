@@ -1,4 +1,4 @@
-platform_id = "claw-platform"
+platform_id = "assistant-platform"
 platform_version = "0.1.0"
 runner_protocol_version = "0.1.0"
 generated_manifest_schema_version = "0.1.0"

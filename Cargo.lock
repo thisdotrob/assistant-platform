@@ -21,6 +21,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "assistant-specialist-browser"
+version = "0.1.0"
+dependencies = [
+ "claw-agent-graph",
+ "claw-capabilities",
+ "claw-core",
+ "claw-specialist-spec",
+ "serde",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -134,6 +145,7 @@ dependencies = [
 name = "claw-cli"
 version = "0.1.0"
 dependencies = [
+ "assistant-specialist-browser",
  "claw-agent-graph",
  "claw-capabilities",
  "claw-channel-slack",
@@ -148,7 +160,6 @@ dependencies = [
  "claw-scheduler",
  "claw-session",
  "claw-setup",
- "claw-specialist-browser",
  "claw-upgrade",
  "claw-web",
  "rusqlite",
@@ -186,6 +197,7 @@ dependencies = [
 name = "claw-host"
 version = "0.1.0"
 dependencies = [
+ "assistant-specialist-browser",
  "claw-agent-graph",
  "claw-agent-protocol",
  "claw-channel-cli",
@@ -199,7 +211,6 @@ dependencies = [
  "claw-scheduler",
  "claw-session",
  "claw-setup",
- "claw-specialist-browser",
  "claw-specialist-spec",
  "libc",
  "rusqlite",
@@ -285,17 +296,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
-]
-
-[[package]]
-name = "claw-specialist-browser"
-version = "0.1.0"
-dependencies = [
- "claw-agent-graph",
- "claw-capabilities",
- "claw-core",
- "claw-specialist-spec",
- "serde",
 ]
 
 [[package]]

@@ -3,7 +3,7 @@
 # Node + the Claude Code CLI + the shim source. Specialists that need extra
 # binaries (e.g. the browser specialist's Chromium + agent-browser) ship their
 # own image `FROM claw-agent-base:<ver>` that adds only those binaries; see
-# crates/claw-specialist-browser/image/Dockerfile. Built outside the sandbox
+# crates/assistant-specialist-browser/image/Dockerfile. Built outside the sandbox
 # (npm needs network); the run-loop spawns it per session and bind-mounts /session.
 
 FROM node:22-slim

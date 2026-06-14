@@ -41,7 +41,7 @@ use claw_session::{
     current_outbound_compat, enqueue_inbound, read_outbound, InboundMessage, LocalControl,
     OutboundMessage, SessionLayout,
 };
-use claw_specialist_browser::{BrowserSpecialistProfile, NetworkPolicy, BROWSER_PROFILE_ID};
+use assistant_specialist_browser::{BrowserSpecialistProfile, NetworkPolicy, BROWSER_PROFILE_ID};
 use claw_web::{
     ApprovalView, CapabilityView, GroupView, Overview, OverviewCounts, QueueItem,
     ReadinessReportView, RunDetail, ScheduledItem, SessionView, SpecialistStatusView, UserView,

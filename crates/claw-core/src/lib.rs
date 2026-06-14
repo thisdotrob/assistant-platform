@@ -6,7 +6,7 @@ pub use compat::{CompatibilityReport, LoadError, run_compatibility_check};
 pub use manifest::{PlatformManifest, ProductManifest, PromptFragment, PromptFragmentManifest};
 pub use validate::{Diagnostic, DiagnosticCode};
 
-pub const PLATFORM_ID: &str = "claw-platform";
+pub const PLATFORM_ID: &str = "assistant-platform";
 pub const PLATFORM_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub const PLATFORM_MODULES: &[&str] = &[

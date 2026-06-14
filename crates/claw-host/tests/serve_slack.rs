@@ -21,7 +21,7 @@ use claw_db::{apply, baseline_migrations, baseline_owner_modules, open_central};
 use claw_host::{
     serve_slack, EngagementMode, HostConfig, SchedulerTickConfig, SlackServeOptions, UnknownPolicy,
 };
-use claw_specialist_browser::{browser_specialist_spec, NetworkPolicy, BROWSER_PROFILE_ID};
+use assistant_specialist_browser::{browser_specialist_spec, NetworkPolicy, BROWSER_PROFILE_ID};
 use claw_permissions::{add_user_dm, create_user};
 use claw_router::{count_drops_by_reason, DropReason};
 use claw_scheduler::{

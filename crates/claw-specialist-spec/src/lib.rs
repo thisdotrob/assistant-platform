@@ -5,7 +5,7 @@
 //! concurrency limits, the custom container image carrying its binaries, and the
 //! in-container turn configuration (system prompt, allowed tools, env). It is
 //! deliberately plain data with no dependency on the host, the Docker runtime, or
-//! the agent-graph engine, so a specialist crate (e.g. `claw-specialist-browser`)
+//! the agent-graph engine, so a specialist crate (e.g. `assistant-specialist-browser`)
 //! can build one without pulling in core internals — the host translates the
 //! plain fields into an `ImageRef`, a `RegisteredProfile`, and container env at
 //! registration time.
@@ -35,7 +35,7 @@ pub struct SpecialistSpec {
     /// The session-group slug the specialist's job containers live under
     /// (e.g. `"browser-1"`); jobs run at `{sessions}/{group_slug}/{job_id}`.
     pub group_slug: String,
-    /// The custom image's repository (e.g. `"claw-specialist-browser"`). The host
+    /// The custom image's repository (e.g. `"assistant-specialist-browser"`). The host
     /// builds an `ImageRef` from this plus the tag (and optional digest).
     pub image_repository: String,
     /// The image tag (e.g. the specialist crate's version).
@@ -101,7 +101,7 @@ mod tests {
             profile_id: "browser-specialist".to_string(),
             profile_version: "0.1.0".to_string(),
             group_slug: "browser-1".to_string(),
-            image_repository: "claw-specialist-browser".to_string(),
+            image_repository: "assistant-specialist-browser".to_string(),
             image_tag: "0.1.0".to_string(),
             image_digest: None,
             max_specialists: 1,

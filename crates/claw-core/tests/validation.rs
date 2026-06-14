@@ -18,7 +18,7 @@ fn codes(diags: &[claw_core::Diagnostic]) -> Vec<DiagnosticCode> {
 fn platform(modules_toml: &str) -> claw_core::PlatformManifest {
     let src = format!(
         r#"
-platform_id = "claw-platform"
+platform_id = "assistant-platform"
 platform_version = "0.1.0"
 runner_protocol_version = "0.1.0"
 generated_manifest_schema_version = "0.1.0"

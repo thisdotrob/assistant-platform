@@ -26,7 +26,7 @@ claw-scheduler = { path = "../claw-scheduler" }
 claw-agent-graph = { path = "../claw-agent-graph" }
 # Test-only: the bootstrap harness drives a real browser delegation to exercise
 # the seam. The browser specialist now lives in its own sibling repo.
-claw-specialist-browser = { path = "../../../claw-specialist-browser" }
+assistant-specialist-browser = { path = "../../../assistant-specialist-browser" }
 claw-runtime-docker = { path = "../claw-runtime-docker" }
 claw-web = { path = "../claw-web" }
 claw-channel-telegram = { path = "../claw-channel-telegram" }

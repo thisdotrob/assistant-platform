@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "claw-platform agent container runner: session DB protocol + Claude turn",
+  "description": "assistant-platform agent container runner: session DB protocol + Claude turn",
   "engines": {
     "node": ">=22"
   },
