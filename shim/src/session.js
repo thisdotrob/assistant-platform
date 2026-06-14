@@ -1,5 +1,5 @@
 // Session DB protocol — the byte-for-byte runner side of the host/container
-// contract defined by `claw-session` (see crates/claw-session/src/control.rs,
+// contract defined by `assistant-session` (see crates/assistant-session/src/control.rs,
 // `FakeContainer`). The container owns `outbound.db`, reads `inbound.db`
 // read-only, maintains the heartbeat file and `container_state`, and records
 // `processing_ack` claims. Any divergence here breaks `verify_sequence_parity`
@@ -84,7 +84,7 @@ export class Session {
 
   // Read inbound messages the way the host expects: read-only, ordered by seq.
   // `metadata` carries the host-injected `<retrieved_memories>` block (see
-  // crates/claw-host/src/run.rs `memory_block`); it is a side-channel separate
+  // crates/assistant-host/src/run.rs `memory_block`); it is a side-channel separate
   // from `content`, consumed only by the Claude path.
   async readInbound() {
     return withRetry(() => {

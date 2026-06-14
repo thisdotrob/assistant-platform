@@ -1,8 +1,8 @@
-# claw-agent-base: the slim shared agent container image. The session DB protocol
+# assistant-base: the slim shared agent container image. The session DB protocol
 # uses Node's built-in `node:sqlite` (no native build), so the base needs only
 # Node + the Claude Code CLI + the shim source. Specialists that need extra
 # binaries (e.g. the browser specialist's Chromium + agent-browser) ship their
-# own image `FROM claw-agent-base:<ver>` that adds only those binaries; see
+# own image `FROM assistant-base:<ver>` that adds only those binaries; see
 # crates/assistant-specialist-browser/image/Dockerfile. Built outside the sandbox
 # (npm needs network); the run-loop spawns it per session and bind-mounts /session.
 

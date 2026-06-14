@@ -1,0 +1,18 @@
+[package]
+name = "assistant-upgrade"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+assistant-core = { path = "../assistant-core" }
+assistant-config = { path = "../assistant-config" }
+assistant-db = { path = "../assistant-db" }
+assistant-session = { path = "../assistant-session" }
+
+[dev-dependencies]
+tempfile = "3.27.0"

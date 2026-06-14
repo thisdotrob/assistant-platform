@@ -6,87 +6,87 @@ base_container_image_contract_version = "0.1.0"
 conformance_suite_version = "0.1.0"
 
 [[modules]]
-id = "claw-core"
+id = "assistant-core"
 
 [[modules]]
-id = "claw-config"
-depends_on = ["claw-core"]
+id = "assistant-config"
+depends_on = ["assistant-core"]
 
 [[modules]]
-id = "claw-db"
-depends_on = ["claw-core", "claw-config"]
+id = "assistant-db"
+depends_on = ["assistant-core", "assistant-config"]
 
 [[modules]]
-id = "claw-agent-protocol"
-depends_on = ["claw-core"]
+id = "assistant-agent-protocol"
+depends_on = ["assistant-core"]
 
 [[modules]]
-id = "claw-session"
-depends_on = ["claw-core", "claw-db"]
+id = "assistant-session"
+depends_on = ["assistant-core", "assistant-db"]
 
 [[modules]]
-id = "claw-router"
-depends_on = ["claw-core", "claw-session", "claw-db"]
+id = "assistant-router"
+depends_on = ["assistant-core", "assistant-session", "assistant-db"]
 
 [[modules]]
-id = "claw-runtime-docker"
-depends_on = ["claw-core", "claw-config"]
+id = "assistant-runtime-docker"
+depends_on = ["assistant-core", "assistant-config"]
 
 [[modules]]
-id = "claw-memory"
-depends_on = ["claw-core", "claw-db"]
+id = "assistant-memory"
+depends_on = ["assistant-core", "assistant-db"]
 
 [[modules]]
-id = "claw-scheduler"
-depends_on = ["claw-core", "claw-db", "claw-session"]
+id = "assistant-scheduler"
+depends_on = ["assistant-core", "assistant-db", "assistant-session"]
 
 [[modules]]
-id = "claw-agent-graph"
-depends_on = ["claw-core", "claw-db", "claw-session"]
+id = "assistant-agent-graph"
+depends_on = ["assistant-core", "assistant-db", "assistant-session"]
 
 [[modules]]
-id = "claw-permissions"
-depends_on = ["claw-core", "claw-db"]
+id = "assistant-permissions"
+depends_on = ["assistant-core", "assistant-db"]
 
 [[modules]]
-id = "claw-approvals"
-depends_on = ["claw-core", "claw-db", "claw-permissions"]
+id = "assistant-approvals"
+depends_on = ["assistant-core", "assistant-db", "assistant-permissions"]
 
 [[modules]]
-id = "claw-capabilities"
-depends_on = ["claw-core", "claw-config"]
+id = "assistant-capabilities"
+depends_on = ["assistant-core", "assistant-config"]
 
 [[modules]]
-id = "claw-channel-cli"
-depends_on = ["claw-router", "claw-session"]
+id = "assistant-channel-cli"
+depends_on = ["assistant-router", "assistant-session"]
 
 [[modules]]
-id = "claw-channel-slack"
-depends_on = ["claw-core", "claw-router", "claw-agent-protocol"]
+id = "assistant-channel-slack"
+depends_on = ["assistant-core", "assistant-router", "assistant-agent-protocol"]
 
 [[modules]]
-id = "claw-channel-telegram"
-depends_on = ["claw-core", "claw-router", "claw-agent-protocol"]
+id = "assistant-channel-telegram"
+depends_on = ["assistant-core", "assistant-router", "assistant-agent-protocol"]
 
 [[modules]]
-id = "claw-specialist-spec"
+id = "assistant-specialist-spec"
 
 [[modules]]
-id = "claw-host"
-depends_on = ["claw-config", "claw-db", "claw-session", "claw-router", "claw-memory", "claw-permissions", "claw-scheduler", "claw-runtime-docker", "claw-channel-cli", "claw-channel-slack", "claw-agent-protocol", "claw-agent-graph", "claw-specialist-spec", "claw-setup"]
+id = "assistant-host"
+depends_on = ["assistant-config", "assistant-db", "assistant-session", "assistant-router", "assistant-memory", "assistant-permissions", "assistant-scheduler", "assistant-runtime-docker", "assistant-channel-cli", "assistant-channel-slack", "assistant-agent-protocol", "assistant-agent-graph", "assistant-specialist-spec", "assistant-setup"]
 
 [[modules]]
-id = "claw-cli"
-depends_on = ["claw-core", "claw-config", "claw-db", "claw-session", "claw-setup", "claw-upgrade"]
+id = "assistant-cli"
+depends_on = ["assistant-core", "assistant-config", "assistant-db", "assistant-session", "assistant-setup", "assistant-upgrade"]
 
 [[modules]]
-id = "claw-web"
-depends_on = ["claw-core", "claw-db", "claw-session"]
+id = "assistant-web"
+depends_on = ["assistant-core", "assistant-db", "assistant-session"]
 
 [[modules]]
-id = "claw-setup"
-depends_on = ["claw-core", "claw-config", "claw-db", "claw-capabilities"]
+id = "assistant-setup"
+depends_on = ["assistant-core", "assistant-config", "assistant-db", "assistant-capabilities"]
 
 [[modules]]
-id = "claw-upgrade"
-depends_on = ["claw-core", "claw-config", "claw-db", "claw-session"]
+id = "assistant-upgrade"
+depends_on = ["assistant-core", "assistant-config", "assistant-db", "assistant-session"]

@@ -6,7 +6,7 @@
 
 [[fragment]]
 id = "shared-safety"
-owner_module = "claw-agent-protocol"
+owner_module = "assistant-agent-protocol"
 version = "0.1.0"
 target_agent_kind = "orchestrator"
 order = 10
@@ -19,7 +19,7 @@ conformance_assertions = [
 
 [[fragment]]
 id = "output-protocol"
-owner_module = "claw-agent-protocol"
+owner_module = "assistant-agent-protocol"
 version = "0.1.0"
 target_agent_kind = "orchestrator"
 order = 20
@@ -33,7 +33,7 @@ conformance_assertions = [
 
 [[fragment]]
 id = "specialist-output-protocol"
-owner_module = "claw-agent-protocol"
+owner_module = "assistant-agent-protocol"
 version = "0.1.0"
 target_agent_kind = "specialist"
 order = 25
@@ -45,13 +45,13 @@ conformance_assertions = [
 
 [[fragment]]
 id = "approval-policy"
-owner_module = "claw-approvals"
+owner_module = "assistant-approvals"
 version = "0.1.0"
 target_agent_kind = "orchestrator"
 order = 30
 parameters = ["approval_card_style"]
 depends_on = ["shared-safety", "output-protocol"]
-override_rules = "Owned by claw-approvals; describes when to request approval and how to render approval cards. Products may tighten thresholds, not loosen them."
+override_rules = "Owned by assistant-approvals; describes when to request approval and how to render approval cards. Products may tighten thresholds, not loosen them."
 conformance_assertions = [
   "high-impact actions request approval before execution",
   "approval requests match the pending-approval response contract",
@@ -59,13 +59,13 @@ conformance_assertions = [
 
 [[fragment]]
 id = "scheduling-wording"
-owner_module = "claw-scheduler"
+owner_module = "assistant-scheduler"
 version = "0.1.0"
 target_agent_kind = "orchestrator"
 order = 40
 parameters = ["timezone"]
 depends_on = ["output-protocol"]
-override_rules = "Owned by claw-scheduler; standardizes one-off and recurring scheduling language and pause/resume/cancel phrasing."
+override_rules = "Owned by assistant-scheduler; standardizes one-off and recurring scheduling language and pause/resume/cancel phrasing."
 conformance_assertions = [
   "scheduled-work phrasing maps to scheduler lifecycle verbs",
   "recurrence descriptions are unambiguous about timezone",
@@ -73,13 +73,13 @@ conformance_assertions = [
 
 [[fragment]]
 id = "rag-injection"
-owner_module = "claw-memory"
+owner_module = "assistant-memory"
 version = "0.1.0"
 target_agent_kind = "orchestrator"
 order = 50
 parameters = ["memory_namespace", "max_snippets"]
 depends_on = ["shared-safety", "output-protocol"]
-override_rules = "Owned by claw-memory; defines pre-reply RAG block placement and citation. Product crates supply the memory taxonomy, not the injection mechanics."
+override_rules = "Owned by assistant-memory; defines pre-reply RAG block placement and citation. Product crates supply the memory taxonomy, not the injection mechanics."
 conformance_assertions = [
   "retrieved memory snippets are injected before the reply turn",
   "injected snippets are bounded by max_snippets",

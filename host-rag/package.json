@@ -1,5 +1,5 @@
 {
-  "name": "claw-host-rag",
+  "name": "assistant-host-rag",
   "version": "0.1.0",
   "private": true,
   "type": "module",

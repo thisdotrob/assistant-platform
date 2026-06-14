@@ -1,10 +1,10 @@
-// claw-agent-base entrypoint: the persistent per-session runner.
+// assistant-base entrypoint: the persistent per-session runner.
 //
 // One container serves one session for its lifetime. It lays a heartbeat, polls
 // `inbound.db` read-only for new host messages (even seqs), processes each
 // exactly once, and emits a single reply row to `outbound.db` (odd seqs). The
 // host's "turn done" signal is that new odd-seq row; its death signal is a stale
-// heartbeat. See crates/claw-host/src/run.rs for the host side.
+// heartbeat. See crates/assistant-host/src/run.rs for the host side.
 //
 // Mode is selected by CLAW_RUNNER_MODE (set by the runtime's auth path):
 //   - "stub"            : echo the message back (no credentials; proves plumbing).
@@ -64,7 +64,7 @@ async function main() {
   process.on('SIGINT', shutdown);
 
   await session.start(RUN_ID);
-  console.error(`claw-agent-base up: mode=${MODE} run_id=${RUN_ID}`);
+  console.error(`assistant-base up: mode=${MODE} run_id=${RUN_ID}`);
 
   // Resume cross-restart dedup: skip inbound a prior container already fully
   // processed (its ack committed atomically with its reply). Without this a
@@ -130,7 +130,7 @@ async function main() {
       if (rows.length === 0) rows.push({ kind: 'text', content: '' });
 
       try {
-        await session.emitBatch(rows, seq, 'claw-agent-base');
+        await session.emitBatch(rows, seq, 'assistant-base');
         // Mark handled ONLY once the batch is committed: a dropped emit must be
         // retried next tick, never silently lost. The ack is written in the same
         // transaction, so the in-memory and persisted dedup markers never diverge.

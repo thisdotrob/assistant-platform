@@ -21,14 +21,273 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "assistant-agent-graph"
+version = "0.1.0"
+dependencies = [
+ "assistant-db",
+ "assistant-session",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "assistant-agent-protocol"
+version = "0.1.0"
+dependencies = [
+ "assistant-core",
+ "assistant-session",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "assistant-approvals"
+version = "0.1.0"
+dependencies = [
+ "assistant-db",
+ "assistant-permissions",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "assistant-capabilities"
+version = "0.1.0"
+dependencies = [
+ "assistant-config",
+ "assistant-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "assistant-channel-cli"
+version = "0.1.0"
+dependencies = [
+ "assistant-router",
+ "assistant-session",
+ "tempfile",
+]
+
+[[package]]
+name = "assistant-channel-slack"
+version = "0.1.0"
+dependencies = [
+ "assistant-router",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tungstenite",
+]
+
+[[package]]
+name = "assistant-channel-telegram"
+version = "0.1.0"
+dependencies = [
+ "assistant-router",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "assistant-cli"
+version = "0.1.0"
+dependencies = [
+ "assistant-agent-graph",
+ "assistant-capabilities",
+ "assistant-channel-slack",
+ "assistant-channel-telegram",
+ "assistant-config",
+ "assistant-core",
+ "assistant-db",
+ "assistant-memory",
+ "assistant-permissions",
+ "assistant-router",
+ "assistant-runtime-docker",
+ "assistant-scheduler",
+ "assistant-session",
+ "assistant-setup",
+ "assistant-specialist-browser",
+ "assistant-upgrade",
+ "assistant-web",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "assistant-config"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "assistant-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "assistant-db"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "assistant-host"
+version = "0.1.0"
+dependencies = [
+ "assistant-agent-graph",
+ "assistant-agent-protocol",
+ "assistant-channel-cli",
+ "assistant-channel-slack",
+ "assistant-config",
+ "assistant-db",
+ "assistant-memory",
+ "assistant-permissions",
+ "assistant-router",
+ "assistant-runtime-docker",
+ "assistant-scheduler",
+ "assistant-session",
+ "assistant-setup",
+ "assistant-specialist-browser",
+ "assistant-specialist-spec",
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "assistant-memory"
+version = "0.1.0"
+dependencies = [
+ "assistant-db",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "assistant-permissions"
+version = "0.1.0"
+dependencies = [
+ "assistant-db",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "assistant-router"
+version = "0.1.0"
+dependencies = [
+ "assistant-db",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "assistant-runtime-docker"
+version = "0.1.0"
+dependencies = [
+ "assistant-config",
+ "assistant-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "assistant-scheduler"
+version = "0.1.0"
+dependencies = [
+ "assistant-db",
+ "assistant-session",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "assistant-session"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "assistant-setup"
+version = "0.1.0"
+dependencies = [
+ "assistant-config",
+ "assistant-db",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "assistant-specialist-browser"
 version = "0.1.0"
 dependencies = [
- "claw-agent-graph",
- "claw-capabilities",
- "claw-core",
- "claw-specialist-spec",
+ "assistant-agent-graph",
+ "assistant-capabilities",
+ "assistant-core",
+ "assistant-specialist-spec",
  "serde",
+]
+
+[[package]]
+name = "assistant-specialist-spec"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "assistant-upgrade"
+version = "0.1.0"
+dependencies = [
+ "assistant-config",
+ "assistant-core",
+ "assistant-db",
+ "assistant-session",
+ "tempfile",
+]
+
+[[package]]
+name = "assistant-web"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -67,265 +326,6 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
-
-[[package]]
-name = "claw-agent-graph"
-version = "0.1.0"
-dependencies = [
- "claw-db",
- "claw-session",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "claw-agent-protocol"
-version = "0.1.0"
-dependencies = [
- "claw-core",
- "claw-session",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "claw-approvals"
-version = "0.1.0"
-dependencies = [
- "claw-db",
- "claw-permissions",
- "rusqlite",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "claw-capabilities"
-version = "0.1.0"
-dependencies = [
- "claw-config",
- "claw-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "claw-channel-cli"
-version = "0.1.0"
-dependencies = [
- "claw-router",
- "claw-session",
- "tempfile",
-]
-
-[[package]]
-name = "claw-channel-slack"
-version = "0.1.0"
-dependencies = [
- "claw-router",
- "rustls",
- "serde",
- "serde_json",
- "tungstenite",
-]
-
-[[package]]
-name = "claw-channel-telegram"
-version = "0.1.0"
-dependencies = [
- "claw-router",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "claw-cli"
-version = "0.1.0"
-dependencies = [
- "assistant-specialist-browser",
- "claw-agent-graph",
- "claw-capabilities",
- "claw-channel-slack",
- "claw-channel-telegram",
- "claw-config",
- "claw-core",
- "claw-db",
- "claw-memory",
- "claw-permissions",
- "claw-router",
- "claw-runtime-docker",
- "claw-scheduler",
- "claw-session",
- "claw-setup",
- "claw-upgrade",
- "claw-web",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "claw-config"
-version = "0.1.0"
-dependencies = [
- "serde",
- "toml",
-]
-
-[[package]]
-name = "claw-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "toml",
-]
-
-[[package]]
-name = "claw-db"
-version = "0.1.0"
-dependencies = [
- "rusqlite",
- "sha2",
- "tempfile",
-]
-
-[[package]]
-name = "claw-host"
-version = "0.1.0"
-dependencies = [
- "assistant-specialist-browser",
- "claw-agent-graph",
- "claw-agent-protocol",
- "claw-channel-cli",
- "claw-channel-slack",
- "claw-config",
- "claw-db",
- "claw-memory",
- "claw-permissions",
- "claw-router",
- "claw-runtime-docker",
- "claw-scheduler",
- "claw-session",
- "claw-setup",
- "claw-specialist-spec",
- "libc",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "claw-memory"
-version = "0.1.0"
-dependencies = [
- "claw-db",
- "rusqlite",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "tempfile",
-]
-
-[[package]]
-name = "claw-permissions"
-version = "0.1.0"
-dependencies = [
- "claw-db",
- "rusqlite",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "claw-router"
-version = "0.1.0"
-dependencies = [
- "claw-db",
- "rusqlite",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "claw-runtime-docker"
-version = "0.1.0"
-dependencies = [
- "claw-config",
- "claw-core",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "claw-scheduler"
-version = "0.1.0"
-dependencies = [
- "claw-db",
- "claw-session",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
-]
-
-[[package]]
-name = "claw-session"
-version = "0.1.0"
-dependencies = [
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
-]
-
-[[package]]
-name = "claw-setup"
-version = "0.1.0"
-dependencies = [
- "claw-config",
- "claw-db",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "claw-specialist-spec"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "claw-upgrade"
-version = "0.1.0"
-dependencies = [
- "claw-config",
- "claw-core",
- "claw-db",
- "claw-session",
- "tempfile",
-]
-
-[[package]]
-name = "claw-web"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
-]
 
 [[package]]
 name = "core-foundation"

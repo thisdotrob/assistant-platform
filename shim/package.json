@@ -1,5 +1,5 @@
 {
-  "name": "claw-agent-base",
+  "name": "assistant-base",
   "version": "0.1.0",
   "private": true,
   "type": "module",

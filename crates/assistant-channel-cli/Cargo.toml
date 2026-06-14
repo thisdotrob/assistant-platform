@@ -1,0 +1,16 @@
+[package]
+name = "assistant-channel-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+assistant-router = { path = "../assistant-router" }
+assistant-session = { path = "../assistant-session" }
+
+[dev-dependencies]
+tempfile = "3.27.0"

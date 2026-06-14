@@ -1,0 +1,60 @@
+[package]
+name = "assistant-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+assistant-config = { path = "../assistant-config" }
+assistant-db = { path = "../assistant-db" }
+assistant-session = { path = "../assistant-session" }
+# The host is the run-loop composition root and the only place that enables the
+# real CLI-backed Docker runtime; offline builds/tests still drive `FakeRuntime`.
+assistant-runtime-docker = { path = "../assistant-runtime-docker", features = ["real-docker"] }
+assistant-router = { path = "../assistant-router" }
+# Domain subsystems composed into the run-loop: their central-DB tables are added
+# by the v2 migrations the host's setup step applies, and (later phases) consulted
+# per turn.
+assistant-memory = { path = "../assistant-memory" }
+assistant-permissions = { path = "../assistant-permissions" }
+assistant-scheduler = { path = "../assistant-scheduler" }
+assistant-channel-cli = { path = "../assistant-channel-cli" }
+assistant-channel-slack = { path = "../assistant-channel-slack" }
+assistant-agent-protocol = { path = "../assistant-agent-protocol" }
+# Specialist delegation: the agent-graph engine (job model, registry, handoff
+# routing, job persistence) and the plain `SpecialistSpec` vocab. The host is
+# specialist-agnostic — products register specs — so it links the spec crate, not
+# any concrete specialist (e.g. the browser).
+assistant-agent-graph = { path = "../assistant-agent-graph" }
+assistant-specialist-spec = { path = "../assistant-specialist-spec" }
+assistant-setup = { path = "../assistant-setup" }
+# Named directly so the Slack serve path can hold a central-DB `&Connection`
+# across the listener loop for the permissions/engagement gate; the domain crates
+# already take `&rusqlite::Connection` in their public APIs.
+rusqlite = "0.32.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+# Only the live Slack daemon installs SIGTERM/SIGINT handlers so it can drain its
+# per-channel containers before exit; gated behind `socket-mode` so the offline
+# build never compiles the signal path.
+libc = { version = "0.2", optional = true }
+
+[features]
+# Enables the live Slack Socket Mode transport (`TungsteniteOpener`) for the
+# slack serve entry. Off by default so the offline workspace build stays free of
+# the websocket/TLS stack; the serve *engine* is transport-injectable and always
+# compiled, so the offline integration test exercises it with a fake opener.
+socket-mode = ["assistant-channel-slack/socket-mode", "dep:libc"]
+
+[dev-dependencies]
+tempfile = "3.27.0"
+# Test-only: the serve-slack delegation integration test registers the real
+# browser spec to exercise the generic specialist seam end to end. Not a runtime
+# dependency — products supply specs; the host stays specialist-agnostic. The
+# browser specialist lives in its own sibling repo, so the path reaches up out of
+# the platform workspace.
+assistant-specialist-browser = { path = "../../../assistant-specialist-browser" }
