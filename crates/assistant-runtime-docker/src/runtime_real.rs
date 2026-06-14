@@ -124,7 +124,7 @@ mod tests {
     // touching a Docker daemon or the network.
     #[test]
     fn missing_binary_is_a_launch_error() {
-        let mut runtime = DockerCliRuntime::with_binary("claw-no-such-docker-binary");
+        let mut runtime = DockerCliRuntime::with_binary("assistant-no-such-docker-binary");
         let spec = SpawnSpec {
             name: "sess-1".to_string(),
             image: crate::image::ImageRef::new("assistant-base", "0.1.0"),

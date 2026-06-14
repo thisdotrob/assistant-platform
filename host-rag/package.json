@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Host-invoked qmd RAG sidecar for claw v2 (retrieve/embed/status over stdin/stdout JSON)",
+  "description": "Host-invoked qmd RAG sidecar for assistant-platform (retrieve/embed/status over stdin/stdout JSON)",
   "engines": {
     "node": ">=22"
   },

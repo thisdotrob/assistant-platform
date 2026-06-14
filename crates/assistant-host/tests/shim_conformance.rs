@@ -43,14 +43,14 @@ fn node_available() -> bool {
 }
 
 /// Spawn the real shim as an external process standing in for the container.
-/// `CLAW_SESSION_DIR` points it at the host's session folder; stub mode echoes.
+/// `ASSISTANT_SESSION_DIR` points it at the host's session folder; stub mode echoes.
 fn spawn_shim(layout: &SessionLayout) -> Child {
     Command::new("node")
         .arg("--experimental-sqlite")
         .arg(shim_entry())
-        .env("CLAW_SESSION_DIR", layout.dir())
-        .env("CLAW_RUNNER_MODE", "stub")
-        .env("CLAW_POLL_INTERVAL_MS", "20")
+        .env("ASSISTANT_SESSION_DIR", layout.dir())
+        .env("ASSISTANT_RUNNER_MODE", "stub")
+        .env("ASSISTANT_POLL_INTERVAL_MS", "20")
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
         .spawn()

@@ -1,4 +1,4 @@
-// Claude path for `CLAW_RUNNER_MODE=claude_oauth`: run one Claude turn via the
+// Claude path for `ASSISTANT_RUNNER_MODE=claude_oauth`: run one Claude turn via the
 // Agent SDK and return its final text plus any schedules it requested.
 //
 // Auth is handled entirely out-of-process: the container holds only
@@ -21,14 +21,14 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
-// Parse the host-supplied specialist menu from CLAW_SPECIALISTS: a JSON array of
+// Parse the host-supplied specialist menu from ASSISTANT_SPECIALISTS: a JSON array of
 // `{ name, description }` entries (the projection of the registered
 // `SpecialistSpec`s). Tolerates absence and malformed values by returning an
 // empty list — with no specialists the orchestrator simply omits the `delegate`
 // tool. Pure and SDK-free so it is unit-testable. Entries missing a string name
 // or description are dropped.
 export function specialistsFromEnv(env) {
-  const raw = env.CLAW_SPECIALISTS;
+  const raw = env.ASSISTANT_SPECIALISTS;
   if (!raw) return [];
   let parsed;
   try {
@@ -207,16 +207,16 @@ export async function runClaudeTurn(userText, memory) {
     );
   }
 
-  const scheduler = createSdkMcpServer({ name: 'claw', version: '0.1.0', tools });
+  const scheduler = createSdkMcpServer({ name: 'assistant', version: '0.1.0', tools });
 
-  const allowedTools = ['mcp__claw__schedule_message', 'mcp__claw__save_memory'];
-  if (hasSpecialists) allowedTools.push('mcp__claw__delegate');
+  const allowedTools = ['mcp__assistant__schedule_message', 'mcp__assistant__save_memory'];
+  if (hasSpecialists) allowedTools.push('mcp__assistant__delegate');
 
   const q = query({
     prompt,
     options: {
       systemPrompt: buildSystemPrompt(specialists),
-      mcpServers: { claw: scheduler },
+      mcpServers: { assistant: scheduler },
       // Disable every built-in Claude Code tool (Bash/Read/Edit/WebSearch/…) so
       // the only tools in context are our MCP tools — the model can't claim or
       // attempt abilities it doesn't have. `tools` restricts the available set;

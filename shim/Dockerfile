@@ -22,7 +22,7 @@ RUN npm install --omit=dev \
 COPY src ./src
 
 # The host bind-mounts the per-session DBs and heartbeat here.
-ENV CLAW_SESSION_DIR=/session
+ENV ASSISTANT_SESSION_DIR=/session
 
 # `--experimental-sqlite` is required on Node 22 and harmlessly accepted on newer.
 ENTRYPOINT ["node", "--experimental-sqlite", "src/index.js"]

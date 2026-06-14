@@ -238,7 +238,7 @@ fn run_slack_inner(opts: SlackRunOptions) -> Result<(), HostError> {
         );
 
     // Optional qmd semantic ranking on top of the catalog floor. Enabled only
-    // when `CLAW_QMD_SIDECAR` points at the host-side sidecar; absent it, memory
+    // when `ASSISTANT_QMD_SIDECAR` points at the host-side sidecar; absent it, memory
     // stays catalog-only (so the default daemon and the offline gate are
     // unaffected). When enabled, kick off a background reindex so the index is
     // warm by the first turn — the serve loop never blocks on it.
@@ -253,11 +253,11 @@ fn run_slack_inner(opts: SlackRunOptions) -> Result<(), HostError> {
     // The orchestrator container builds its dynamic `delegate` routing menu from
     // this: a JSON array of `{name, description}`, one per registered specialist.
     // `run_specialist_turn` overwrites `extra_env`, so a specialist never inherits
-    // `CLAW_SPECIALISTS` (and so cannot re-delegate from its own image).
+    // `ASSISTANT_SPECIALISTS` (and so cannot re-delegate from its own image).
     let menu: Vec<_> = opts.specialists.iter().map(|s| s.menu_entry()).collect();
     let specialists_json = serde_json::to_string(&menu)
         .map_err(|e| HostError::Layout(format!("serializing the specialist menu failed: {e}")))?;
-    config.extra_env = vec![("CLAW_SPECIALISTS".to_string(), specialists_json)];
+    config.extra_env = vec![("ASSISTANT_SPECIALISTS".to_string(), specialists_json)];
 
     let slack_opts = SlackServeOptions {
         sessions_dir,
@@ -292,13 +292,13 @@ fn run_slack_inner(opts: SlackRunOptions) -> Result<(), HostError> {
 }
 
 /// Build the qmd sidecar config from the environment, or `None` to stay
-/// catalog-only. `CLAW_QMD_SIDECAR` is the path to the host-side sidecar script
-/// (`qmd-sidecar.mjs`); `CLAW_QMD_NODE` optionally overrides the `node` binary.
+/// catalog-only. `ASSISTANT_QMD_SIDECAR` is the path to the host-side sidecar script
+/// (`qmd-sidecar.mjs`); `ASSISTANT_QMD_NODE` optionally overrides the `node` binary.
 /// The index db and corpus live under the orchestrator memory root's `qmd/`
 /// directory, which the catalog walk already skips as derived state.
 #[cfg(feature = "socket-mode")]
 fn qmd_sidecar_config(layout: &InstanceLayout) -> Option<qmd::QmdSidecar> {
-    let sidecar_path = PathBuf::from(std::env::var_os("CLAW_QMD_SIDECAR")?);
+    let sidecar_path = PathBuf::from(std::env::var_os("ASSISTANT_QMD_SIDECAR")?);
     if sidecar_path.as_os_str().is_empty() {
         return None;
     }
@@ -307,7 +307,7 @@ fn qmd_sidecar_config(layout: &InstanceLayout) -> Option<qmd::QmdSidecar> {
         .join("qmd");
     let mut sidecar =
         qmd::QmdSidecar::new(sidecar_path, qmd_dir.join("index.sqlite"), qmd_dir.join("corpus"));
-    if let Some(node_bin) = std::env::var_os("CLAW_QMD_NODE")
+    if let Some(node_bin) = std::env::var_os("ASSISTANT_QMD_NODE")
         && !node_bin.is_empty()
     {
         sidecar.node_bin = node_bin.to_string_lossy().into_owned();

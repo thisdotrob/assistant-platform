@@ -1,5 +1,5 @@
 // Unit tests for the orchestrator path's offline-testable, SDK-free helpers:
-// `specialistsFromEnv` (parsing the host-supplied CLAW_SPECIALISTS menu) and
+// `specialistsFromEnv` (parsing the host-supplied ASSISTANT_SPECIALISTS menu) and
 // `buildSystemPrompt` (the data-driven persona). The full turn (runClaudeTurn)
 // drives the Agent SDK and is exercised only by the live smoke. Run with
 // `node --test shim/test/claude.test.js`.
@@ -15,7 +15,7 @@ test('specialistsFromEnv returns an empty list when the env var is absent', () =
 
 test('specialistsFromEnv parses a JSON array of name/description entries', () => {
   const out = specialistsFromEnv({
-    CLAW_SPECIALISTS: JSON.stringify([
+    ASSISTANT_SPECIALISTS: JSON.stringify([
       { name: 'browser', description: 'browses the web and reads pages' },
     ]),
   });
@@ -23,13 +23,13 @@ test('specialistsFromEnv parses a JSON array of name/description entries', () =>
 });
 
 test('specialistsFromEnv tolerates malformed JSON and non-arrays by returning empty', () => {
-  assert.deepEqual(specialistsFromEnv({ CLAW_SPECIALISTS: 'not json' }), []);
-  assert.deepEqual(specialistsFromEnv({ CLAW_SPECIALISTS: JSON.stringify({ a: 1 }) }), []);
+  assert.deepEqual(specialistsFromEnv({ ASSISTANT_SPECIALISTS: 'not json' }), []);
+  assert.deepEqual(specialistsFromEnv({ ASSISTANT_SPECIALISTS: JSON.stringify({ a: 1 }) }), []);
 });
 
 test('specialistsFromEnv drops entries missing a string name or description', () => {
   const out = specialistsFromEnv({
-    CLAW_SPECIALISTS: JSON.stringify([
+    ASSISTANT_SPECIALISTS: JSON.stringify([
       { name: 'browser', description: 'ok' },
       { name: 'noDesc' },
       { description: 'no name' },

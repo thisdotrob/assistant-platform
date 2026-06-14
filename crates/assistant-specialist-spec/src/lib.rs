@@ -63,12 +63,12 @@ pub struct SpecialistSpec {
     pub max_turns: u32,
     /// Extra environment variables passed straight into the specialist's
     /// container, for any in-image tooling the specialist reads (the host adds the
-    /// generic `CLAW_SPECIALIST_*` turn-config vars on top of these).
+    /// generic `ASSISTANT_SPECIALIST_*` turn-config vars on top of these).
     pub extra_env: Vec<(String, String)>,
 }
 
 /// A `{ name, description }` pair the host hands the orchestrator (as JSON in
-/// `CLAW_SPECIALISTS`) so it can build the dynamic `delegate` routing menu.
+/// `ASSISTANT_SPECIALISTS`) so it can build the dynamic `delegate` routing menu.
 /// Derived from the registered specs; the orchestrator never sees the full spec.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpecialistMenuEntry {

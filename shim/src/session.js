@@ -15,7 +15,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { writeFileSync, rmSync } from 'node:fs';
 
-const SESSION_DIR = process.env.CLAW_SESSION_DIR ?? '/session';
+const SESSION_DIR = process.env.ASSISTANT_SESSION_DIR ?? '/session';
 export const INBOUND_DB = `${SESSION_DIR}/inbound.db`;
 export const OUTBOUND_DB = `${SESSION_DIR}/outbound.db`;
 export const HEARTBEAT = `${SESSION_DIR}/.heartbeat`;

@@ -188,7 +188,7 @@ mod tests {
                         detail: "schema at head".to_string(),
                     },
                     ReadinessCheckView {
-                        module: "claw-browser".to_string(),
+                        module: "assistant-browser".to_string(),
                         name: "chromium".to_string(),
                         status: "fail".to_string(),
                         detail: "image not pulled".to_string(),
@@ -285,7 +285,7 @@ mod tests {
         let v = body_json(&resp);
         assert_eq!(v["ready"], false);
         assert_eq!(v["blocking_failures"], 1);
-        assert_eq!(v["checks"][1]["module"], "claw-browser");
+        assert_eq!(v["checks"][1]["module"], "assistant-browser");
         assert_eq!(v["checks"][1]["status"], "fail");
         assert_eq!(v["checks"][2]["status"], "skipped");
     }

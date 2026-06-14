@@ -15,10 +15,10 @@ use assistant_setup::{CheckStatus, FnStep, SetupStep};
 
 /// Env var naming the build context (directory containing the agent
 /// `Dockerfile`). When unset, the build step reports a skip rather than failing.
-pub const AGENT_IMAGE_DIR_ENV: &str = "CLAW_AGENT_IMAGE_DIR";
+pub const AGENT_IMAGE_DIR_ENV: &str = "ASSISTANT_AGENT_IMAGE_DIR";
 /// Env var overriding the image tag to build/run. Defaults to
 /// `assistant-base:<platform version>`.
-pub const AGENT_IMAGE_TAG_ENV: &str = "CLAW_AGENT_IMAGE_TAG";
+pub const AGENT_IMAGE_TAG_ENV: &str = "ASSISTANT_AGENT_IMAGE_TAG";
 
 fn default_image_tag() -> String {
     format!("{BASE_IMAGE_REPOSITORY}:{}", env!("CARGO_PKG_VERSION"))

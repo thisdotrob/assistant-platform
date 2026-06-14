@@ -217,7 +217,7 @@ mod tests {
             Self {
                 identity: Ok(BotIdentity {
                     bot_id: 999,
-                    username: "claw_bot".to_string(),
+                    username: "assistant_bot".to_string(),
                     can_read_all_group_messages: true,
                 }),
                 webhook: Ok(WebhookInfo::default()),
@@ -261,7 +261,7 @@ mod tests {
     fn identity_passes_and_detects_mismatch_or_auth_error() {
         let probe = FakeProbe::new();
         assert!(bot_identity(&probe, None).is_pass());
-        assert!(bot_identity(&probe, Some("claw_bot")).is_pass());
+        assert!(bot_identity(&probe, Some("assistant_bot")).is_pass());
         assert!(bot_identity(&probe, Some("other")).is_blocking_failure());
 
         let failing = FakeProbe { identity: Err(ProbeError::Auth("401".to_string())), ..FakeProbe::new() };

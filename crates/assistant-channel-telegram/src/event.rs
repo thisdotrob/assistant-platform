@@ -141,7 +141,7 @@ pub fn normalize(update: &Update, id: &TelegramIdentity) -> Option<RoutingEvent>
 /// Telegram entity offsets/lengths are UTF-16 code-unit counts, so we slice the
 /// text in UTF-16 space and compare the decoded span exactly. A global
 /// `text.contains` would let an unrelated mention entity plus a stray
-/// `@claw_bot` in the body — or a longer `@claw_bot_evil` handle — spoof a
+/// `@assistant_bot` in the body — or a longer `@assistant_bot_evil` handle — spoof a
 /// mention.
 fn mentions_bot(text: &str, entities: &[Entity], id: &TelegramIdentity) -> bool {
     let target = format!("@{}", id.bot_username);
@@ -174,7 +174,7 @@ mod tests {
     use super::*;
 
     fn id() -> TelegramIdentity {
-        TelegramIdentity { bot_id: 999, bot_username: "claw_bot".to_string() }
+        TelegramIdentity { bot_id: 999, bot_username: "assistant_bot".to_string() }
     }
 
     #[test]
@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn group_username_mention_is_detected() {
         let u = parse_update(
-            r#"{"update_id":2,"message":{"message_id":11,"from":{"id":2,"is_bot":false},"chat":{"id":-100,"type":"supergroup"},"text":"hey @claw_bot deploy","entities":[{"type":"mention","offset":4,"length":9}]}}"#,
+            r#"{"update_id":2,"message":{"message_id":11,"from":{"id":2,"is_bot":false},"chat":{"id":-100,"type":"supergroup"},"text":"hey @assistant_bot deploy","entities":[{"type":"mention","offset":4,"length":14}]}}"#,
         )
         .unwrap();
         let ev = normalize(&u, &id()).unwrap();
@@ -221,7 +221,7 @@ mod tests {
         // handle appears only as plain body text. A global substring match
         // would be spoofed into treating this as a mention.
         let u = parse_update(
-            r#"{"update_id":10,"message":{"message_id":18,"from":{"id":2,"is_bot":false},"chat":{"id":-100,"type":"supergroup"},"text":"@someone_else look at @claw_bot","entities":[{"type":"mention","offset":0,"length":13}]}}"#,
+            r#"{"update_id":10,"message":{"message_id":18,"from":{"id":2,"is_bot":false},"chat":{"id":-100,"type":"supergroup"},"text":"@someone_else look at @assistant_bot","entities":[{"type":"mention","offset":0,"length":13}]}}"#,
         )
         .unwrap();
         assert!(!normalize(&u, &id()).unwrap().is_mention);
@@ -229,10 +229,10 @@ mod tests {
 
     #[test]
     fn longer_lookalike_handle_is_not_our_mention() {
-        // `@claw_bot_evil` contains `@claw_bot` as a prefix; an exact span
+        // `@assistant_bot_evil` contains `@assistant_bot` as a prefix; an exact span
         // comparison must reject it.
         let u = parse_update(
-            r#"{"update_id":11,"message":{"message_id":19,"from":{"id":2,"is_bot":false},"chat":{"id":-100,"type":"supergroup"},"text":"hey @claw_bot_evil ping","entities":[{"type":"mention","offset":4,"length":14}]}}"#,
+            r#"{"update_id":11,"message":{"message_id":19,"from":{"id":2,"is_bot":false},"chat":{"id":-100,"type":"supergroup"},"text":"hey @assistant_bot_evil ping","entities":[{"type":"mention","offset":4,"length":19}]}}"#,
         )
         .unwrap();
         assert!(!normalize(&u, &id()).unwrap().is_mention);
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn the_bots_own_message_is_self_authored() {
         let u = parse_update(
-            r#"{"update_id":7,"message":{"message_id":16,"from":{"id":999,"is_bot":true,"username":"claw_bot"},"chat":{"id":1,"type":"private"},"text":"echo"}}"#,
+            r#"{"update_id":7,"message":{"message_id":16,"from":{"id":999,"is_bot":true,"username":"assistant_bot"},"chat":{"id":1,"type":"private"},"text":"echo"}}"#,
         )
         .unwrap();
         assert!(normalize(&u, &id()).unwrap().is_self_author);

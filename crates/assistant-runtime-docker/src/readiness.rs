@@ -43,7 +43,7 @@ pub fn mount_roots_ready(roots: &[&Path]) -> CheckStatus {
                 detail: format!("mount root {} does not exist", root.display()),
             };
         }
-        let probe = root.join(".claw-write-probe");
+        let probe = root.join(".assistant-write-probe");
         match std::fs::write(&probe, b"") {
             Ok(()) => {
                 let _ = std::fs::remove_file(&probe);
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn missing_root_fails() {
-        let status = mount_roots_ready(&[Path::new("/no/such/root/claw")]);
+        let status = mount_roots_ready(&[Path::new("/no/such/root/assistant")]);
         assert!(status.is_blocking_failure());
     }
 

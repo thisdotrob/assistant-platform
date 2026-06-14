@@ -134,7 +134,7 @@ thread rather than left silent. A specialist runs with
 `RunnerAuthMode::Specialist`: its own real Claude turn, credentialed through the
 OneCLI proxy exactly like the orchestrator (`Specialist` is gateway-gated just
 like `ClaudeOAuth`, differing only in its runner-mode tag), with a restricted
-toolset the host supplies entirely from the spec via generic `CLAW_SPECIALIST_*`
+toolset the host supplies entirely from the spec via generic `ASSISTANT_SPECIALIST_*`
 env (system prompt, enabled tools, auto-approve patterns, step ceiling). The host
 folds any per-spec guardrails into the spec's `system_prompt` at build time, so
 the in-container harness needs no specialist-specific knowledge. On success the
@@ -285,20 +285,20 @@ the write/read against a foreign owner). The same wiring backs both the read
 (snippet hydration) and write (`save_memory`) sides of the catalog.
 
 The optional qmd semantic-ranking layer is opt-in via the environment and wired
-only on the live Slack serve path. `CLAW_QMD_SIDECAR` is the path to the host-side
+only on the live Slack serve path. `ASSISTANT_QMD_SIDECAR` is the path to the host-side
 node sidecar script (`qmd-sidecar.mjs`); when set (and non-empty) the run-loop
 builds a `QmdSidecar` config and layers it onto memory via `with_qmd_sidecar`, and
-`CLAW_QMD_NODE` optionally overrides the `node` binary used to run it. The qmd
+`ASSISTANT_QMD_NODE` optionally overrides the `node` binary used to run it. The qmd
 index db and corpus live under the orchestrator memory root's own `qmd/`
 subdirectory (`<root>/qmd/index.sqlite`, `<root>/qmd/corpus`), which the catalog's
 markdown walk already skips as derived state — so qmd never re-indexes its own
-artifacts. Absent `CLAW_QMD_SIDECAR` (the default, and every offline test) memory
+artifacts. Absent `ASSISTANT_QMD_SIDECAR` (the default, and every offline test) memory
 stays catalog-only. When a sidecar is configured the run-loop also spawns a
 detached startup thread that re-indexes the orchestrator memory root into the qmd
 corpus + index (`reindex_root` driving `NodeQmd`); it is fail-open (every failure
 logged, daemon proceeds on the catalog floor) so the serve loop never blocks on a
 first-run embed that may download embedding models. Each installation
-has its own OneCLI gateway: `CLAW_ONECLI_URL` names this installation's gateway
+has its own OneCLI gateway: `ASSISTANT_ONECLI_URL` names this installation's gateway
 base URL, and the OneCLI agent identifier is the instance directory name (e.g.
 `assistant-work`, `cleoclaw`) so credentials never mix across installations. That
 same identifier names the per-session container `{agent}-{session}` (e.g.
@@ -308,7 +308,7 @@ the Claude path the run-loop queries `GET <url>/api/container-config?agent=<id>`
 and applies the returned proxy env plus a CA trust anchor to the spawn; the CA is
 mounted after `prepare_spawn` to bypass the `.pem` mount block (it is a public
 trust anchor, not a secret). The Anthropic credential is never read by this
-crate; it lives only in the OneCLI gateway. `CLAW_ANTHROPIC_SECRET_FILE` is
+crate; it lives only in the OneCLI gateway. `ASSISTANT_ANTHROPIC_SECRET_FILE` is
 probed for presence/size only, never read.
 
 The Slack serve path uses the same OneCLI gateway for credentials: the real
@@ -328,7 +328,7 @@ container-config and rebinding that userinfo onto the host-reachable proxy
 endpoint passed in (`--proxy-url`, default `http://127.0.0.1:10355`) — the
 container-facing `host.docker.internal` authority is unreachable from the host.
 The derived URL carries the agent token and is fed to curl via stdin config only,
-never argv or logs. `CLAW_ONECLI_URL` must therefore be set for `serve-slack` (in
+never argv or logs. `ASSISTANT_ONECLI_URL` must therefore be set for `serve-slack` (in
 both stub and Claude mode), since the host's Slack calls are injected regardless
 of the container runner mode. The live `serve-slack` path sets
 `SlackServeOptions.scheduler` to a `SchedulerTickConfig` with a stable
@@ -342,14 +342,14 @@ registers (empty by default — offline tests and any non-delegating product —
 which drops any `delegate` row a turn emits). From that list the host derives two
 env channels, both carried via `HostConfig::extra_env` (the generic per-spawn env
 appended after the auth/gateway env). The **orchestrator** container receives
-`CLAW_SPECIALISTS`: a JSON array of `{name, description}` menu entries (one per
+`ASSISTANT_SPECIALISTS`: a JSON array of `{name, description}` menu entries (one per
 spec) the orchestrator's harness turns into the dynamic `delegate` tool enum and
 prompt — with no specs the harness omits the `delegate` tool entirely. Each
-**specialist** container receives the generic `CLAW_SPECIALIST_*` turn config from
-its resolved spec (`CLAW_SPECIALIST_SYSTEM_PROMPT`, `CLAW_SPECIALIST_TOOLS` and
-`CLAW_SPECIALIST_ALLOWED_TOOLS` as JSON arrays, `CLAW_SPECIALIST_MAX_TURNS`) plus
+**specialist** container receives the generic `ASSISTANT_SPECIALIST_*` turn config from
+its resolved spec (`ASSISTANT_SPECIALIST_SYSTEM_PROMPT`, `ASSISTANT_SPECIALIST_TOOLS` and
+`ASSISTANT_SPECIALIST_ALLOWED_TOOLS` as JSON arrays, `ASSISTANT_SPECIALIST_MAX_TURNS`) plus
 any spec-declared `extra_env`; `run_specialist_turn` overwrites `extra_env` so a
-specialist never inherits `CLAW_SPECIALISTS`. A specialist runs with
+specialist never inherits `ASSISTANT_SPECIALISTS`. A specialist runs with
 `RunnerAuthMode::Specialist`, a gateway-gated mode, so the run-loop applies the
 OneCLI proxy/CA config to the specialist spec just as it does for `ClaudeOAuth`.
 

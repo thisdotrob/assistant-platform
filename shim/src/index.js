@@ -6,21 +6,21 @@
 // host's "turn done" signal is that new odd-seq row; its death signal is a stale
 // heartbeat. See crates/assistant-host/src/run.rs for the host side.
 //
-// Mode is selected by CLAW_RUNNER_MODE (set by the runtime's auth path):
+// Mode is selected by ASSISTANT_RUNNER_MODE (set by the runtime's auth path):
 //   - "stub"            : echo the message back (no credentials; proves plumbing).
 //   - "claude_oauth"    : run one real Claude turn via the Agent SDK, through the
 //                         OneCLI proxy that swaps the placeholder OAuth token.
 //   - "specialist"      : a specialist sub-agent that runs its own real Claude
 //                         turn (credentialed like claude_oauth) with a restricted
-//                         toolset supplied entirely by the host via CLAW_SPECIALIST_*
+//                         toolset supplied entirely by the host via ASSISTANT_SPECIALIST_*
 //                         env; the harness is specialist-agnostic.
 
 import { Session } from './session.js';
 
-const MODE = process.env.CLAW_RUNNER_MODE ?? 'stub';
+const MODE = process.env.ASSISTANT_RUNNER_MODE ?? 'stub';
 const RUN_ID =
-  process.env.CLAW_RUN_ID ?? `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-const POLL_INTERVAL_MS = Number(process.env.CLAW_POLL_INTERVAL_MS ?? 250);
+  process.env.ASSISTANT_RUN_ID ?? `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const POLL_INTERVAL_MS = Number(process.env.ASSISTANT_POLL_INTERVAL_MS ?? 250);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

@@ -17,7 +17,7 @@ pub const PLACEHOLDER_TOKEN: &str = "placeholder";
 
 pub const OAUTH_TOKEN_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 pub const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
-pub const RUNNER_MODE_ENV: &str = "CLAW_RUNNER_MODE";
+pub const RUNNER_MODE_ENV: &str = "ASSISTANT_RUNNER_MODE";
 
 /// Which provider a runner container uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

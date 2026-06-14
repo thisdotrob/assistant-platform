@@ -68,9 +68,9 @@ pub struct HostConfig {
     /// catalog leave it off).
     pub memory: Option<MemoryRetrieval>,
     /// Extra environment passed straight into the container spec, appended after
-    /// the auth-path env. The orchestrator path carries the `CLAW_SPECIALISTS`
+    /// the auth-path env. The orchestrator path carries the `ASSISTANT_SPECIALISTS`
     /// routing menu; the specialist path carries its spec's per-image env plus the
-    /// generic `CLAW_SPECIALIST_*` turn config.
+    /// generic `ASSISTANT_SPECIALIST_*` turn config.
     pub extra_env: Vec<(String, String)>,
 }
 

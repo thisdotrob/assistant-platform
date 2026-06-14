@@ -1,5 +1,5 @@
 /**
- * Host-invoked qmd RAG sidecar for claw v2. The host (`claw_host::qmd::NodeQmd`)
+ * Host-invoked qmd RAG sidecar for assistant-platform. The host (`assistant_host::qmd::NodeQmd`)
  * shells `node qmd-sidecar.mjs <subcommand>`, writes a JSON request on stdin, and
  * reads a JSON response on stdout. Three subcommands:
  *

@@ -1,4 +1,4 @@
-// Generic specialist turn for `CLAW_RUNNER_MODE=specialist`.
+// Generic specialist turn for `ASSISTANT_RUNNER_MODE=specialist`.
 //
 // A specialist runs in its own job-keyed container, separate from the
 // orchestrator, but is credentialed the same way (placeholder OAuth token routed
@@ -17,13 +17,13 @@
 // `allowedTools: ["Bash(agent-browser:*)"]`; the harness here never mentions it.
 //
 // Env contract (set by the host in `run_specialist_turn`):
-//   - CLAW_SPECIALIST_SYSTEM_PROMPT : the complete system prompt (guardrails
+//   - ASSISTANT_SPECIALIST_SYSTEM_PROMPT : the complete system prompt (guardrails
 //                                     already folded in host-side).
-//   - CLAW_SPECIALIST_TOOLS         : JSON array of SDK built-in tools to enable
+//   - ASSISTANT_SPECIALIST_TOOLS         : JSON array of SDK built-in tools to enable
 //                                     (e.g. ["Bash"]).
-//   - CLAW_SPECIALIST_ALLOWED_TOOLS : JSON array of auto-approve patterns
+//   - ASSISTANT_SPECIALIST_ALLOWED_TOOLS : JSON array of auto-approve patterns
 //                                     (e.g. ["Bash(agent-browser:*)"]).
-//   - CLAW_SPECIALIST_MAX_TURNS     : integer per-turn step ceiling.
+//   - ASSISTANT_SPECIALIST_MAX_TURNS     : integer per-turn step ceiling.
 //
 // The result shape matches the orchestrator responder (`{ text, scheduled,
 // memories }`) so the runner loop emits it with no special-casing. A specialist
@@ -52,10 +52,10 @@ function jsonStringArray(raw, fallback) {
 // Derive the turn's options from the host-supplied environment. Pure and
 // SDK-free so it is unit-testable without spawning a Claude turn.
 export function specialistOptionsFromEnv(env) {
-  const systemPrompt = env.CLAW_SPECIALIST_SYSTEM_PROMPT ?? '';
-  const tools = jsonStringArray(env.CLAW_SPECIALIST_TOOLS, []);
-  const allowedTools = jsonStringArray(env.CLAW_SPECIALIST_ALLOWED_TOOLS, []);
-  const parsedMaxTurns = Number.parseInt(env.CLAW_SPECIALIST_MAX_TURNS ?? '', 10);
+  const systemPrompt = env.ASSISTANT_SPECIALIST_SYSTEM_PROMPT ?? '';
+  const tools = jsonStringArray(env.ASSISTANT_SPECIALIST_TOOLS, []);
+  const allowedTools = jsonStringArray(env.ASSISTANT_SPECIALIST_ALLOWED_TOOLS, []);
+  const parsedMaxTurns = Number.parseInt(env.ASSISTANT_SPECIALIST_MAX_TURNS ?? '', 10);
   const maxTurns = Number.isInteger(parsedMaxTurns) && parsedMaxTurns > 0
     ? parsedMaxTurns
     : DEFAULT_MAX_TURNS;

@@ -141,36 +141,36 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), ConfigError> {
     })
 }
 
-/// Apply recognized `CLAW_*` overrides onto a parsed config.
+/// Apply recognized `ASSISTANT_*` overrides onto a parsed config.
 pub fn apply_env_overlay(
     config: &mut Config,
     env: &BTreeMap<String, String>,
 ) -> Result<(), ConfigError> {
-    if let Some(value) = env.get("CLAW_INSTANCE") {
+    if let Some(value) = env.get("ASSISTANT_INSTANCE") {
         config.product.instance = Some(value.clone());
     }
-    if let Some(value) = env.get("CLAW_OWNER_HANDLE") {
+    if let Some(value) = env.get("ASSISTANT_OWNER_HANDLE") {
         config.product.owner_handle = Some(value.clone());
     }
-    if let Some(value) = env.get("CLAW_WEB_PORT") {
+    if let Some(value) = env.get("ASSISTANT_WEB_PORT") {
         config.web.port = value.parse().map_err(|_| ConfigError::InvalidEnv {
-            key: "CLAW_WEB_PORT".to_string(),
+            key: "ASSISTANT_WEB_PORT".to_string(),
             value: value.clone(),
         })?;
     }
-    if let Some(value) = env.get("CLAW_WEB_ENABLED") {
+    if let Some(value) = env.get("ASSISTANT_WEB_ENABLED") {
         config.web.enabled = parse_bool(value).ok_or_else(|| ConfigError::InvalidEnv {
-            key: "CLAW_WEB_ENABLED".to_string(),
+            key: "ASSISTANT_WEB_ENABLED".to_string(),
             value: value.clone(),
         })?;
     }
     Ok(())
 }
 
-/// Collect `CLAW_*` variables from the live process environment.
+/// Collect `ASSISTANT_*` variables from the live process environment.
 pub fn env_overlay_from_process() -> BTreeMap<String, String> {
     std::env::vars()
-        .filter(|(k, _)| k.starts_with("CLAW_"))
+        .filter(|(k, _)| k.starts_with("ASSISTANT_"))
         .collect()
 }
 
@@ -229,10 +229,10 @@ mod tests {
     fn env_overlay_overrides_fields() {
         let mut config = sample();
         let mut env = BTreeMap::new();
-        env.insert("CLAW_INSTANCE".to_string(), "work".to_string());
-        env.insert("CLAW_OWNER_HANDLE".to_string(), "rob".to_string());
-        env.insert("CLAW_WEB_ENABLED".to_string(), "true".to_string());
-        env.insert("CLAW_WEB_PORT".to_string(), "9000".to_string());
+        env.insert("ASSISTANT_INSTANCE".to_string(), "work".to_string());
+        env.insert("ASSISTANT_OWNER_HANDLE".to_string(), "rob".to_string());
+        env.insert("ASSISTANT_WEB_ENABLED".to_string(), "true".to_string());
+        env.insert("ASSISTANT_WEB_PORT".to_string(), "9000".to_string());
         apply_env_overlay(&mut config, &env).unwrap();
         assert_eq!(config.product.instance.as_deref(), Some("work"));
         assert_eq!(config.product.owner_handle.as_deref(), Some("rob"));
@@ -244,7 +244,7 @@ mod tests {
     fn env_overlay_rejects_bad_port() {
         let mut config = sample();
         let mut env = BTreeMap::new();
-        env.insert("CLAW_WEB_PORT".to_string(), "not-a-port".to_string());
+        env.insert("ASSISTANT_WEB_PORT".to_string(), "not-a-port".to_string());
         assert!(matches!(
             apply_env_overlay(&mut config, &env),
             Err(ConfigError::InvalidEnv { .. })

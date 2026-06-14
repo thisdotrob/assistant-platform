@@ -6,7 +6,7 @@
 //! `CLAUDE_CODE_OAUTH_TOKEN=placeholder`; the gateway rewrites that placeholder to
 //! the real Anthropic OAuth secret on outbound `api.anthropic.com` traffic.
 //!
-//! Each claw installation runs its **own** OneCLI gateway (its own stack on its
+//! Each assistant installation runs its **own** OneCLI gateway (its own stack on its
 //! own port), so personal and work credential stores never mix. The gateway base
 //! URL is configured per-instance via [`ONECLI_URL_ENV`]; the host queries
 //! `GET <url>/api/container-config?agent=<agent>` and applies the returned proxy
@@ -31,12 +31,12 @@ use serde::Deserialize;
 /// `http://127.0.0.1:10254`). The host queries its `/api/container-config`
 /// endpoint; the proxy URL the container uses is returned in that response, not
 /// configured directly.
-pub const ONECLI_URL_ENV: &str = "CLAW_ONECLI_URL";
+pub const ONECLI_URL_ENV: &str = "ASSISTANT_ONECLI_URL";
 
 /// Path to a 0600 file holding the Anthropic OAuth secret, kept outside the
 /// repo. Only its presence/size is inspected here; the secret is registered into
 /// the OneCLI store at setup, never read at run time.
-pub const ANTHROPIC_SECRET_FILE_ENV: &str = "CLAW_ANTHROPIC_SECRET_FILE";
+pub const ANTHROPIC_SECRET_FILE_ENV: &str = "ASSISTANT_ANTHROPIC_SECRET_FILE";
 
 /// Base port for a OneCLI gateway. Per-installation gateways offset off this so
 /// personal and work stacks don't collide on one host.
@@ -65,7 +65,7 @@ pub struct ContainerConfig {
 /// Errors applying the OneCLI gateway config to a spawn.
 #[derive(Debug)]
 pub enum OneCliError {
-    /// `CLAW_ONECLI_URL` is unset; the Claude path has no gateway to query.
+    /// `ASSISTANT_ONECLI_URL` is unset; the Claude path has no gateway to query.
     GatewayUrlMissing,
     /// The agent identifier had characters outside the URL-safe set.
     InvalidAgent(String),

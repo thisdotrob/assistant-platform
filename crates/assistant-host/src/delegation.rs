@@ -27,7 +27,7 @@
 //! ([`RunnerAuthMode::Specialist`]) credentialed through the OneCLI proxy. The
 //! spec carries the complete in-container turn config (system prompt, tools,
 //! limits, env); the host hands it to the generic shim harness via the
-//! `CLAW_SPECIALIST_*` env. No browser- or specialist-specific knowledge lives
+//! `ASSISTANT_SPECIALIST_*` env. No browser- or specialist-specific knowledge lives
 //! here.
 
 use std::path::Path;
@@ -296,7 +296,7 @@ where
     // The specialist runs its own custom image (carrying the binaries it needs),
     // its own auth mode, and no orchestrator memory injection; mounts and cadence
     // are inherited from the base config. Its per-image `extra_env` is preserved
-    // and the generic `CLAW_SPECIALIST_*` turn config is layered on top.
+    // and the generic `ASSISTANT_SPECIALIST_*` turn config is layered on top.
     let image = match &spec.image_digest {
         Some(digest) => ImageRef::pinned(&spec.image_repository, &spec.image_tag, digest),
         None => ImageRef::new(&spec.image_repository, &spec.image_tag),
@@ -306,7 +306,7 @@ where
     // A specialist runs the credentialed equivalent of the orchestrator's mode: a
     // stub orchestrator (the offline gate) spawns a stub specialist that needs no
     // OneCLI gateway, while any credentialed orchestrator spawns a real
-    // `Specialist` turn (`CLAW_RUNNER_MODE=specialist`, OneCLI-gated).
+    // `Specialist` turn (`ASSISTANT_RUNNER_MODE=specialist`, OneCLI-gated).
     config.auth_mode = match base_config.auth_mode {
         RunnerAuthMode::Stub => RunnerAuthMode::Stub,
         _ => RunnerAuthMode::Specialist,
@@ -315,13 +315,13 @@ where
     config.extra_env = spec.extra_env.clone();
     config.extra_env.extend([
         (
-            "CLAW_SPECIALIST_SYSTEM_PROMPT".to_string(),
+            "ASSISTANT_SPECIALIST_SYSTEM_PROMPT".to_string(),
             spec.system_prompt.clone(),
         ),
-        ("CLAW_SPECIALIST_TOOLS".to_string(), tools_json),
-        ("CLAW_SPECIALIST_ALLOWED_TOOLS".to_string(), allowed_tools_json),
+        ("ASSISTANT_SPECIALIST_TOOLS".to_string(), tools_json),
+        ("ASSISTANT_SPECIALIST_ALLOWED_TOOLS".to_string(), allowed_tools_json),
         (
-            "CLAW_SPECIALIST_MAX_TURNS".to_string(),
+            "ASSISTANT_SPECIALIST_MAX_TURNS".to_string(),
             spec.max_turns.to_string(),
         ),
     ]);

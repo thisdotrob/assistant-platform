@@ -347,11 +347,11 @@ mod tests {
     #[test]
     fn applies_in_module_then_version_order() {
         let set = set_with(
-            &["claw-a", "claw-b"],
+            &["assistant-a", "assistant-b"],
             vec![
-                Migration::new("claw-b", 1, "b1", "CREATE TABLE b (id INTEGER);"),
-                Migration::new("claw-a", 2, "a2", "CREATE TABLE a2 (id INTEGER);"),
-                Migration::new("claw-a", 1, "a1", "CREATE TABLE a1 (id INTEGER);"),
+                Migration::new("assistant-b", 1, "b1", "CREATE TABLE b (id INTEGER);"),
+                Migration::new("assistant-a", 2, "a2", "CREATE TABLE a2 (id INTEGER);"),
+                Migration::new("assistant-a", 1, "a1", "CREATE TABLE a1 (id INTEGER);"),
             ],
         );
         let ordered: Vec<_> = set
@@ -363,9 +363,9 @@ mod tests {
         assert_eq!(
             ordered,
             vec![
-                ("claw-a".to_string(), 1),
-                ("claw-a".to_string(), 2),
-                ("claw-b".to_string(), 1),
+                ("assistant-a".to_string(), 1),
+                ("assistant-a".to_string(), 2),
+                ("assistant-b".to_string(), 1),
             ]
         );
     }
@@ -373,7 +373,7 @@ mod tests {
     #[test]
     fn unknown_module_is_rejected() {
         let set = set_with(
-            &["claw-a"],
+            &["assistant-a"],
             vec![Migration::new("claw-z", 1, "z", "SELECT 1;")],
         );
         assert!(matches!(
@@ -385,10 +385,10 @@ mod tests {
     #[test]
     fn duplicate_version_is_rejected() {
         let set = set_with(
-            &["claw-a"],
+            &["assistant-a"],
             vec![
-                Migration::new("claw-a", 1, "x", "SELECT 1;"),
-                Migration::new("claw-a", 1, "y", "SELECT 2;"),
+                Migration::new("assistant-a", 1, "x", "SELECT 1;"),
+                Migration::new("assistant-a", 1, "y", "SELECT 2;"),
             ],
         );
         assert!(matches!(
@@ -401,16 +401,16 @@ mod tests {
     fn forward_migration_on_empty_db_creates_tables() {
         let mut conn = mem();
         let set = set_with(
-            &["claw-a"],
+            &["assistant-a"],
             vec![Migration::new(
-                "claw-a",
+                "assistant-a",
                 1,
                 "create_thing",
                 "CREATE TABLE thing (id INTEGER PRIMARY KEY);",
             )],
         );
         let report = apply(&mut conn, &set).unwrap();
-        assert_eq!(report.applied, vec![("claw-a".to_string(), 1)]);
+        assert_eq!(report.applied, vec![("assistant-a".to_string(), 1)]);
         let count: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='thing'",
@@ -425,9 +425,9 @@ mod tests {
     fn rerun_is_idempotent_and_skips_applied() {
         let mut conn = mem();
         let set = set_with(
-            &["claw-a"],
+            &["assistant-a"],
             vec![Migration::new(
-                "claw-a",
+                "assistant-a",
                 1,
                 "create_thing",
                 "CREATE TABLE thing (id INTEGER PRIMARY KEY);",
@@ -436,23 +436,23 @@ mod tests {
         apply(&mut conn, &set).unwrap();
         let second = apply(&mut conn, &set).unwrap();
         assert!(second.applied.is_empty());
-        assert_eq!(second.skipped, vec![("claw-a".to_string(), 1)]);
+        assert_eq!(second.skipped, vec![("assistant-a".to_string(), 1)]);
     }
 
     #[test]
     fn checksum_mismatch_refuses() {
         let mut conn = mem();
         let original = set_with(
-            &["claw-a"],
-            vec![Migration::new("claw-a", 1, "v1", "CREATE TABLE thing (id INTEGER);")],
+            &["assistant-a"],
+            vec![Migration::new("assistant-a", 1, "v1", "CREATE TABLE thing (id INTEGER);")],
         );
         apply(&mut conn, &original).unwrap();
 
         // Same (module, version), different SQL => drift.
         let drifted = set_with(
-            &["claw-a"],
+            &["assistant-a"],
             vec![Migration::new(
-                "claw-a",
+                "assistant-a",
                 1,
                 "v1",
                 "CREATE TABLE thing (id INTEGER, extra TEXT);",
@@ -523,17 +523,17 @@ mod tests {
     fn applied_versions_reports_max_per_module() {
         let mut conn = mem();
         let set = set_with(
-            &["claw-a", "claw-b"],
+            &["assistant-a", "assistant-b"],
             vec![
-                Migration::new("claw-a", 1, "a1", "CREATE TABLE a1 (id INTEGER);"),
-                Migration::new("claw-a", 2, "a2", "CREATE TABLE a2 (id INTEGER);"),
-                Migration::new("claw-b", 1, "b1", "CREATE TABLE b1 (id INTEGER);"),
+                Migration::new("assistant-a", 1, "a1", "CREATE TABLE a1 (id INTEGER);"),
+                Migration::new("assistant-a", 2, "a2", "CREATE TABLE a2 (id INTEGER);"),
+                Migration::new("assistant-b", 1, "b1", "CREATE TABLE b1 (id INTEGER);"),
             ],
         );
         apply(&mut conn, &set).unwrap();
         assert_eq!(
             applied_versions(&conn).unwrap(),
-            vec![("claw-a".to_string(), 2), ("claw-b".to_string(), 1)]
+            vec![("assistant-a".to_string(), 2), ("assistant-b".to_string(), 1)]
         );
     }
 }
