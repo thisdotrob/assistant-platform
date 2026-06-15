@@ -7,12 +7,28 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The repository name of the shared base image all agent runners layer on.
-pub const BASE_IMAGE_REPOSITORY: &str = "assistant-base";
+/// The registry repository of the shared base image all agent runners layer on.
+/// Published by `assistant-platform` CI to GHCR (location + visibility mirror
+/// the source repo). Consumers pull it; nobody needs the platform checked out.
+pub const BASE_IMAGE_REPOSITORY: &str = "ghcr.io/thisdotrob/assistant-base";
+
+/// The digest of the published base image, pinning the exact bytes a runner
+/// pulls. Bumped on every base-image republish (see the platform release
+/// runbook). `None` falls back to the `repository:tag` reference.
+pub const BASE_IMAGE_DIGEST: Option<&str> = None;
 
 /// The base runtime the Claude Agent SDK runs inside, confirmed by the
 /// 2026-06-01 auth spike.
 pub const BASE_IMAGE_RUNTIME: &str = "node:22-slim";
+
+/// The base image reference for a given platform version: digest-pinned when
+/// [`BASE_IMAGE_DIGEST`] is set, else `repository:version`.
+pub fn base_image_ref(version: &str) -> ImageRef {
+    match BASE_IMAGE_DIGEST {
+        Some(digest) => ImageRef::pinned(BASE_IMAGE_REPOSITORY, version, digest),
+        None => ImageRef::new(BASE_IMAGE_REPOSITORY, version),
+    }
+}
 
 /// A fully qualified image reference: `repository:tag`, or pinned by digest as
 /// `repository@sha256:...` when a digest is set.
@@ -72,7 +88,7 @@ impl BaseImageContract {
     /// The base image for a given platform version and contract version.
     pub fn for_platform(platform_version: &str, contract_version: &str) -> Self {
         Self {
-            image: ImageRef::new(BASE_IMAGE_REPOSITORY, platform_version),
+            image: base_image_ref(platform_version),
             runtime: BASE_IMAGE_RUNTIME.to_string(),
             contract_version: contract_version.to_string(),
         }
@@ -98,10 +114,20 @@ mod tests {
     }
 
     #[test]
-    fn base_contract_uses_platform_version_as_tag() {
+    fn base_contract_uses_registry_repo_and_version_tag() {
         let contract = BaseImageContract::for_platform("0.1.0", "0.1.0");
-        assert_eq!(contract.image.reference(), "assistant-base:0.1.0");
+        assert_eq!(contract.image.repository, BASE_IMAGE_REPOSITORY);
+        assert_eq!(contract.image.tag, "0.1.0");
+        assert_eq!(contract.image.digest.as_deref(), BASE_IMAGE_DIGEST);
         assert_eq!(contract.runtime, "node:22-slim");
+    }
+
+    #[test]
+    fn base_image_ref_pins_to_configured_digest() {
+        let image = base_image_ref("0.1.0");
+        assert_eq!(image.repository, BASE_IMAGE_REPOSITORY);
+        assert_eq!(image.digest.as_deref(), BASE_IMAGE_DIGEST);
+        assert_eq!(image.is_pinned(), BASE_IMAGE_DIGEST.is_some());
     }
 
     #[test]

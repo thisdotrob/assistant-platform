@@ -10,11 +10,12 @@
 use std::process::Command;
 
 use assistant_db::{apply, open_central, Migration, MigrationSet};
-use assistant_runtime_docker::BASE_IMAGE_REPOSITORY;
+use assistant_runtime_docker::{base_image_ref, BASE_IMAGE_REPOSITORY};
 use assistant_setup::{CheckStatus, FnStep, SetupStep};
 
-/// Env var naming the build context (directory containing the agent
-/// `Dockerfile`). When unset, the build step reports a skip rather than failing.
+/// Env var naming a local build context (directory containing the agent
+/// `Dockerfile`). When set, the step builds the base image from it (local
+/// image-dev); when unset, the step pulls the published base from the registry.
 pub const AGENT_IMAGE_DIR_ENV: &str = "ASSISTANT_AGENT_IMAGE_DIR";
 /// Env var overriding the image tag to build/run. Defaults to
 /// `assistant-base:<platform version>`.
@@ -26,7 +27,7 @@ fn default_image_tag() -> String {
 
 /// The ordered host setup steps a product appends before its readiness gate.
 pub fn setup_steps() -> Vec<Box<dyn SetupStep>> {
-    vec![migrate_domain_db(), build_agent_image(), configure_onecli()]
+    vec![migrate_domain_db(), provision_agent_image(), configure_onecli()]
 }
 
 /// The domain subsystems the run-loop composes (memory/RAG, permissions, the
@@ -80,57 +81,86 @@ fn migrate_domain_db() -> Box<dyn SetupStep> {
     .boxed()
 }
 
-/// Build the shared `assistant-base` image from a `Dockerfile` context. Runs
-/// `docker build` only outside the sandbox; in dry-run (or with no context set)
-/// it reports what it would do without touching Docker.
-fn build_agent_image() -> Box<dyn SetupStep> {
+/// Make the shared `assistant-base` image available for the run-loop. When
+/// [`AGENT_IMAGE_DIR_ENV`] names a `Dockerfile` context, build from it (local
+/// image-dev); otherwise pull the digest-pinned base from the registry so a
+/// product clone needs no platform checkout. Both touch Docker only outside
+/// dry-run; in dry-run the step reports what it would do.
+fn provision_agent_image() -> Box<dyn SetupStep> {
     FnStep::new(
-        "build_agent_image",
-        "Build the assistant-base agent container image",
+        "provision_agent_image",
+        "Provision the assistant-base agent container image (build locally or pull from the registry)",
         |ctx| {
-            let tag = std::env::var(AGENT_IMAGE_TAG_ENV).unwrap_or_else(|_| default_image_tag());
-            let context = std::env::var(AGENT_IMAGE_DIR_ENV).ok();
-
-            if ctx.dry_run() {
-                return Ok(match &context {
-                    Some(dir) => format!("would build {tag} from {dir}"),
-                    None => format!("would build {tag} (set {AGENT_IMAGE_DIR_ENV} to a context)"),
-                });
+            // Local image-dev: build from a Dockerfile context when one is set.
+            if let Ok(dir) = std::env::var(AGENT_IMAGE_DIR_ENV) {
+                let tag =
+                    std::env::var(AGENT_IMAGE_TAG_ENV).unwrap_or_else(|_| default_image_tag());
+                if ctx.dry_run() {
+                    return Ok(format!("would build {tag} from {dir}"));
+                }
+                let output = Command::new("docker")
+                    .args(["build", "-t", &tag, &dir])
+                    .output()
+                    .map_err(|source| {
+                        std::io::Error::new(
+                            source.kind(),
+                            format!("failed to launch docker build: {source}"),
+                        )
+                    })
+                    .map_err(|source| assistant_setup::SetupError::Io {
+                        path: std::path::PathBuf::from(&dir),
+                        source,
+                    })?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Err(assistant_setup::SetupError::Io {
+                        path: std::path::PathBuf::from(&dir),
+                        source: std::io::Error::other(format!(
+                            "docker build failed: {}",
+                            stderr.trim()
+                        )),
+                    });
+                }
+                ctx.record_readiness(
+                    "module:assistant-runtime-docker",
+                    CheckStatus::Pass,
+                    Some(format!("built {tag}")),
+                );
+                return Ok(format!("built {tag}"));
             }
 
-            let Some(dir) = context else {
-                return Ok(format!(
-                    "skipped: set {AGENT_IMAGE_DIR_ENV} to the agent image context to build {tag}"
-                ));
-            };
-
+            // Normal product path: pull the digest-pinned base from the registry,
+            // so setup fails fast on a bad registry/auth rather than at first turn.
+            let reference = base_image_ref(env!("CARGO_PKG_VERSION")).reference();
+            if ctx.dry_run() {
+                return Ok(format!("would pull {reference}"));
+            }
             let output = Command::new("docker")
-                .args(["build", "-t", &tag, &dir])
+                .args(["pull", &reference])
                 .output()
-                .map_err(|source| std::io::Error::new(
-                    source.kind(),
-                    format!("failed to launch docker build: {source}"),
-                ))
+                .map_err(|source| {
+                    std::io::Error::new(
+                        source.kind(),
+                        format!("failed to launch docker pull: {source}"),
+                    )
+                })
                 .map_err(|source| assistant_setup::SetupError::Io {
-                    path: std::path::PathBuf::from(&dir),
+                    path: std::path::PathBuf::from(&reference),
                     source,
                 })?;
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 return Err(assistant_setup::SetupError::Io {
-                    path: std::path::PathBuf::from(&dir),
-                    source: std::io::Error::other(format!(
-                        "docker build failed: {}",
-                        stderr.trim()
-                    )),
+                    path: std::path::PathBuf::from(&reference),
+                    source: std::io::Error::other(format!("docker pull failed: {}", stderr.trim())),
                 });
             }
             ctx.record_readiness(
                 "module:assistant-runtime-docker",
                 CheckStatus::Pass,
-                Some(format!("built {tag}")),
+                Some(format!("pulled {reference}")),
             );
-            Ok(format!("built {tag}"))
+            Ok(format!("pulled {reference}"))
         },
     )
     .boxed()

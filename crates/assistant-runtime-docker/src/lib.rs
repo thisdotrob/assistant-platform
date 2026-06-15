@@ -24,7 +24,10 @@ pub use auth::{
     PLACEHOLDER_TOKEN, RUNNER_MODE_ENV,
 };
 pub use error::{AuthError, MountError, SpawnError};
-pub use image::{BaseImageContract, ImageRef, BASE_IMAGE_REPOSITORY, BASE_IMAGE_RUNTIME};
+pub use image::{
+    base_image_ref, BaseImageContract, ImageRef, BASE_IMAGE_DIGEST, BASE_IMAGE_REPOSITORY,
+    BASE_IMAGE_RUNTIME,
+};
 pub use lifecycle::{
     classify, docker_run_args, gate_session_schema, prepare_spawn, reap_action, ContainerId,
     ContainerRuntime, FakeRuntime, LifecyclePolicy, ReapAction, RuntimeState, SchemaRange,

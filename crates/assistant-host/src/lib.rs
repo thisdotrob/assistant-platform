@@ -16,7 +16,7 @@ use std::io::BufRead;
 use std::path::PathBuf;
 
 use assistant_config::{home_dir, InstanceLayout};
-use assistant_runtime_docker::{BASE_IMAGE_REPOSITORY, DockerCliRuntime, ImageRef};
+use assistant_runtime_docker::{base_image_ref, DockerCliRuntime};
 use assistant_session::SessionLayout;
 
 pub mod admin;
@@ -124,7 +124,7 @@ fn run_inner(opts: RunOptions) -> Result<(), HostError> {
     let onecli = onecli::probe(&instance_layout);
     let onecli_agent = onecli::agent_identifier(&instance_layout);
     let onecli_ca_dir = onecli::OneCliPaths::for_instance(&instance_layout).dir;
-    let image = ImageRef::new(BASE_IMAGE_REPOSITORY, env!("CARGO_PKG_VERSION"));
+    let image = base_image_ref(env!("CARGO_PKG_VERSION"));
     let config = HostConfig::new(image, vec![sessions_dir], opts.mode, onecli)
         .with_onecli_agent(onecli_agent, onecli_ca_dir)
         .with_memory(
@@ -226,7 +226,7 @@ fn run_slack_inner(opts: SlackRunOptions) -> Result<(), HostError> {
     // before the container-facing config consumes `onecli_agent`.
     let proxy_url = onecli::host_proxy_url(&onecli_agent, &opts.proxy_url)?;
 
-    let image = ImageRef::new(BASE_IMAGE_REPOSITORY, env!("CARGO_PKG_VERSION"));
+    let image = base_image_ref(env!("CARGO_PKG_VERSION"));
     let config = HostConfig::new(image, vec![sessions_dir.clone()], opts.mode, onecli)
         .with_onecli_agent(onecli_agent, paths.dir.clone())
         .with_memory(
