@@ -40,8 +40,15 @@ pub const MODULE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Run the platform/product compatibility check and print a human-readable
 /// summary. Returns a process exit code: 0 on success, 1 on failure.
-pub fn doctor_compatibility(platform_root: &Path, product_root: &Path) -> i32 {
-    match assistant_core::run_compatibility_check(platform_root, product_root) {
+///
+/// `platform_root` is the disk override for the platform-side inputs; `None`
+/// uses the binary's compiled-in copy (the checkout-free default).
+pub fn doctor_compatibility(platform_root: Option<&Path>, product_root: &Path) -> i32 {
+    let result = match platform_root {
+        Some(root) => assistant_core::run_compatibility_check(root, product_root),
+        None => assistant_core::run_compatibility_check_embedded(product_root),
+    };
+    match result {
         Err(load_error) => {
             eprintln!("error: {}", load_error);
             1
@@ -316,7 +323,7 @@ pub fn upgrade(request: BootstrapRequest) -> i32 {
 #[allow(clippy::too_many_arguments)]
 pub fn conformance(
     request: BootstrapRequest,
-    platform_root: &Path,
+    platform_root: Option<&Path>,
     product_root: &Path,
     platform_version: String,
     base_container_image_contract_version: String,

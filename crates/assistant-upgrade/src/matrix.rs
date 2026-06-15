@@ -71,14 +71,25 @@ pub struct ConformanceReport {
 }
 
 /// Build the runtime compatibility matrix for one instance.
+///
+/// `platform_root` is the disk override for the platform-side inputs; `None`
+/// reads them from the binary's compiled-in copy (the checkout-free default).
 pub fn compatibility_matrix(
-    platform_root: &Path,
+    platform_root: Option<&Path>,
     product_root: &Path,
     layout: &InstanceLayout,
     runtime: &RuntimeVersions,
 ) -> Result<CompatibilityMatrix, UpgradeError> {
-    let repo = assistant_core::run_compatibility_check(platform_root, product_root)?;
-    let platform = assistant_core::compat::load_platform_manifest(platform_root)?;
+    let (repo, platform) = match platform_root {
+        Some(root) => (
+            assistant_core::run_compatibility_check(root, product_root)?,
+            assistant_core::compat::load_platform_manifest(root)?,
+        ),
+        None => (
+            assistant_core::run_compatibility_check_embedded(product_root)?,
+            assistant_core::compat::embedded_platform_manifest()?,
+        ),
+    };
     let product = assistant_core::compat::load_product_manifest(product_root)?;
     let instance = inventory(layout)?;
 
@@ -94,7 +105,7 @@ pub fn compatibility_matrix(
 /// Run the full conformance suite a product invokes after a version bump: the
 /// repo-level check, the runtime/instance matrix, and a dry-run upgrade preview.
 pub fn conformance(
-    platform_root: &Path,
+    platform_root: Option<&Path>,
     product_root: &Path,
     layout: &InstanceLayout,
     runtime: &RuntimeVersions,
@@ -456,7 +467,7 @@ enabled_modules = []
         drop(conn);
 
         let report = conformance(
-            &platform_root,
+            Some(&platform_root),
             &product_root,
             &layout,
             &runtime_ok(),

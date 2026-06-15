@@ -11,4 +11,5 @@ path = "src/lib.rs"
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
 toml = "0.8.23"
+include_dir = "0.7.4"
 

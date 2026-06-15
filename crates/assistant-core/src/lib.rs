@@ -2,7 +2,9 @@ pub mod compat;
 pub mod manifest;
 pub mod validate;
 
-pub use compat::{CompatibilityReport, LoadError, run_compatibility_check};
+pub use compat::{
+    CompatibilityReport, LoadError, run_compatibility_check, run_compatibility_check_embedded,
+};
 pub use manifest::{PlatformManifest, ProductManifest, PromptFragment, PromptFragmentManifest};
 pub use validate::{Diagnostic, DiagnosticCode};
 
