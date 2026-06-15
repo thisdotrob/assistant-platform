@@ -23,7 +23,7 @@ pub struct Product {
     pub specialists: Vec<SpecialistSpec>,
     /// The product's memory categories. Not yet consumed by `run()` — kept so
     /// the per-product taxonomy decision survives until memory scaffolding wires
-    /// it up. See <ticket>.
+    /// it up (deferred).
     pub memory_taxonomy: Vec<&'static str>,
 }
 
