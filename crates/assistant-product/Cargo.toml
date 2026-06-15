@@ -1,0 +1,17 @@
+[package]
+name = "assistant-product"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+assistant-core = { path = "../assistant-core" }
+assistant-cli = { path = "../assistant-cli" }
+# socket-mode supplies the live Slack serve entry (`run_slack`); the product
+# binary serves Slack, so it's enabled here. `SpecialistSpec` is re-exported by
+# the host, so no direct spec dep is needed.
+assistant-host = { path = "../assistant-host", features = ["socket-mode"] }

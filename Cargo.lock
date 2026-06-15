@@ -194,6 +194,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "assistant-product"
+version = "0.1.0"
+dependencies = [
+ "assistant-cli",
+ "assistant-core",
+ "assistant-host",
+]
+
+[[package]]
 name = "assistant-router"
 version = "0.1.0"
 dependencies = [
