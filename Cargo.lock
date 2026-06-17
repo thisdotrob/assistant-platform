@@ -163,6 +163,7 @@ dependencies = [
  "assistant-session",
  "assistant-setup",
  "assistant-specialist-spec",
+ "assistant-web",
  "libc",
  "rusqlite",
  "serde",

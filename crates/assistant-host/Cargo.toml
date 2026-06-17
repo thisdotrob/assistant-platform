@@ -32,6 +32,10 @@ assistant-agent-protocol = { path = "../assistant-agent-protocol" }
 assistant-agent-graph = { path = "../assistant-agent-graph" }
 assistant-specialist-spec = { path = "../assistant-specialist-spec" }
 assistant-setup = { path = "../assistant-setup" }
+# The operator web UI: a transport-free framework (router/auth/pages/memory
+# editor). The host owns the listener (std::net, sync — see web.rs) and supplies
+# the concrete WebApp/MemoryApp impls over the real central DB + memory root.
+assistant-web = { path = "../assistant-web" }
 # Named directly so the Slack serve path can hold a central-DB `&Connection`
 # across the listener loop for the permissions/engagement gate; the domain crates
 # already take `&rusqlite::Connection` in their public APIs.

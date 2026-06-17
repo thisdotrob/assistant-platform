@@ -375,6 +375,60 @@ pub fn run(product: Product) -> i32 {
         return code;
     }
 
+    if args.get(1).map(String::as_str) == Some("serve-web") {
+        let mut instance: Option<String> = None;
+        let mut home: Option<PathBuf> = None;
+        let mut port: Option<u16> = None;
+        let mut force = false;
+
+        let rest = &args[2..];
+        let mut i = 0;
+        while i < rest.len() {
+            match rest[i].as_str() {
+                "--force" => {
+                    force = true;
+                    i += 1;
+                    continue;
+                }
+                "--instance" => {
+                    if let Some(value) = rest.get(i + 1) {
+                        instance = Some(value.clone());
+                        i += 2;
+                        continue;
+                    }
+                }
+                "--home" => {
+                    if let Some(value) = rest.get(i + 1) {
+                        home = Some(PathBuf::from(value));
+                        i += 2;
+                        continue;
+                    }
+                }
+                "--port" => {
+                    if let Some(value) = rest.get(i + 1) {
+                        match value.parse::<u16>() {
+                            Ok(p) => port = Some(p),
+                            Err(_) => eprintln!("ignoring invalid --port {value:?}"),
+                        }
+                        i += 2;
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+
+        let code = assistant_host::run_web(assistant_host::WebRunOptions {
+            namespace: product.product_id.to_string(),
+            instance,
+            home,
+            port,
+            force,
+        });
+        return code;
+    }
+
     if args.get(1).map(String::as_str) == Some("run") {
         let mut instance: Option<String> = None;
         let mut home: Option<PathBuf> = None;

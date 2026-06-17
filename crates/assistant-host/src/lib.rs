@@ -16,6 +16,8 @@ use std::io::BufRead;
 use std::path::PathBuf;
 
 use assistant_config::{home_dir, InstanceLayout};
+#[cfg(feature = "socket-mode")]
+use assistant_config::{apply_env_overlay, env_overlay_from_process, load_config};
 use assistant_runtime_docker::{base_image_ref, DockerCliRuntime};
 use assistant_session::SessionLayout;
 
@@ -31,6 +33,7 @@ pub mod setup_steps;
 #[cfg(feature = "socket-mode")]
 mod signal;
 pub mod slack;
+pub mod web;
 
 pub use admin::{
     create_scheduled_message, register_user, RegisterUserOptions, ScheduleMessageOptions,
@@ -289,6 +292,111 @@ fn run_slack_inner(opts: SlackRunOptions) -> Result<(), HostError> {
     // way out instead of orphaning them to default-disposition process death.
     let stop = signal::install_shutdown_handler();
     serve_slack_live(proxy_url, paths.ca_cert, slack_opts, &stop)
+}
+
+/// Product-supplied inputs for serving the operator web UI. The UI is a
+/// loopback-only, Bearer-authenticated admin surface over the instance's central
+/// DB + orchestrator memory; it holds no Slack/Anthropic credentials.
+#[cfg(feature = "socket-mode")]
+pub struct WebRunOptions {
+    pub namespace: String,
+    pub instance: Option<String>,
+    pub home: Option<PathBuf>,
+    /// CLI override of the configured port. `None` uses `config.web.port`.
+    pub port: Option<u16>,
+    /// Serve even when `config.web.enabled` is false (the `--force` flag), so an
+    /// operator can bring the UI up ad-hoc without flipping config on disk.
+    pub force: bool,
+}
+
+/// Serve the operator web UI until the process is signalled, returning a process
+/// exit code (0 clean / disabled no-op, 1 on error). Reads the instance's
+/// `config.toml` (with the `ASSISTANT_*` env overlay) for the enable flag,
+/// port, and identity it surfaces; binds loopback only.
+#[cfg(feature = "socket-mode")]
+pub fn run_web(opts: WebRunOptions) -> i32 {
+    match run_web_inner(opts) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("web serve error: {e}");
+            1
+        }
+    }
+}
+
+#[cfg(feature = "socket-mode")]
+fn run_web_inner(opts: WebRunOptions) -> Result<i32, HostError> {
+    let home = opts
+        .home
+        .clone()
+        .or_else(home_dir)
+        .ok_or_else(|| HostError::Layout("HOME is not set; pass --home <path>".to_string()))?;
+    let layout = InstanceLayout::derive(&home, &opts.namespace, opts.instance.as_deref())
+        .map_err(|e| HostError::Layout(e.to_string()))?;
+
+    let mut config =
+        load_config(&layout.config_path()).map_err(|e| HostError::Layout(e.to_string()))?;
+    apply_env_overlay(&mut config, &env_overlay_from_process())
+        .map_err(|e| HostError::Layout(e.to_string()))?;
+
+    if !config.web.enabled && !opts.force {
+        eprintln!(
+            "web UI is disabled (config.web.enabled = false). Enable it in {} or pass --force.",
+            layout.config_path().display()
+        );
+        return Ok(0);
+    }
+
+    let port = opts.port.unwrap_or(config.web.port);
+    // Loopback only: this admin surface must never be reachable off-box.
+    let settings = assistant_web::ServerSettings {
+        bind: "127.0.0.1".to_string(),
+        port,
+        allowed_origins: Vec::new(),
+    };
+
+    let (store, minted) =
+        web::ensure_token(&layout.web_token_path()).map_err(HostError::Io)?;
+
+    let memory_root = assistant_memory::MemoryRoot::orchestrator(&layout.groups_dir(), HOST_AGENT_OWNER)
+        .path()
+        .to_path_buf();
+    let app = web::HostWebApp::open(
+        &layout.central_db_path(),
+        memory_root,
+        config.product.product_id.clone(),
+        config.product.product_version.clone(),
+        config.product.platform_version.clone(),
+        config.product.instance.clone(),
+    )
+    .map_err(|e| HostError::Db(e.to_string()))?;
+
+    let router = web::build_router();
+    let listener = web::bind(&settings).map_err(HostError::Io)?;
+    let bound = listener.local_addr().map_err(HostError::Io)?;
+
+    eprintln!("web UI listening on http://{bound} (loopback, Bearer-authenticated JSON API)");
+    match &minted {
+        Some(token) => {
+            // The plaintext secret exists only now (first run). Surface it once so
+            // the operator can authenticate; thereafter only its hash survives.
+            eprintln!("web token (shown once): {}", token.expose());
+            eprintln!(
+                "  e.g. curl -H 'Authorization: Bearer {}' http://{}/api/overview",
+                token.expose(),
+                bound
+            );
+        }
+        None => eprintln!(
+            "reusing the existing web token from {} (delete it to mint a new one)",
+            layout.web_token_path().display()
+        ),
+    }
+
+    let stop = signal::install_shutdown_handler();
+    web::serve_loop(listener, &settings, &store, &router, &app, &stop).map_err(HostError::Io)?;
+    eprintln!("web UI stopped");
+    Ok(0)
 }
 
 /// Build the qmd sidecar config from the environment, or `None` to stay

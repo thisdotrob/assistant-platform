@@ -123,6 +123,12 @@ impl InstanceLayout {
         self.setup_dir().join("readiness.json")
     }
 
+    /// Where the operator web UI's auth state (the hash of the active bearer
+    /// secret, never the plaintext) is persisted, written `0600`.
+    pub fn web_token_path(&self) -> PathBuf {
+        self.root.join("web-token.json")
+    }
+
     pub fn setup_log_path(&self) -> PathBuf {
         self.logs_dir().join("setup.log")
     }
