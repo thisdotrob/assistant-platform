@@ -117,6 +117,12 @@ fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), std::io::E
         } else if file_type.is_file()
             && path.extension().map(|e| e == "md").unwrap_or(false)
         {
+            // The taxonomy's reserved index is a navigable map of the category
+            // layout, not a memory note: it carries no front matter, so ingesting
+            // it would mint a spurious manual entry. Skip it like `qmd/`.
+            if entry.file_name() == crate::taxonomy::INDEX_FILE {
+                continue;
+            }
             out.push(path);
         }
     }
@@ -235,6 +241,26 @@ mod tests {
         assert!(matches!(report.health, MemoryHealth::Degraded { .. }));
         let h = read_health(&conn, 1).unwrap().unwrap();
         assert_eq!(h.status, "degraded");
+    }
+
+    #[test]
+    fn taxonomy_index_is_not_indexed_as_an_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let groups = tmp.path().join("groups");
+        let root = MemoryRoot::orchestrator(&groups, "ag_o");
+        write(&root.path().join("real.md"), "real note\n");
+        // The reserved taxonomy index (front-matter-less map) must not become a
+        // spurious manual entry.
+        write(
+            &root.path().join(crate::taxonomy::INDEX_FILE),
+            "# Memory taxonomy\n\n- people\n- journal\n",
+        );
+        let conn = db();
+        let mut backend = FakeQmd::new();
+        let report = reindex_root(&conn, &root, 1, &mut backend).unwrap();
+        assert_eq!(report.indexed, 1);
+        let rows = entries_for_agent(&conn, 1).unwrap();
+        assert!(rows.iter().all(|r| r.rel_path != crate::taxonomy::INDEX_FILE));
     }
 
     #[test]

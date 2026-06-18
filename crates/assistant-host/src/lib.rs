@@ -13,7 +13,7 @@
 //! the sandbox.
 
 use std::io::BufRead;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use assistant_config::{home_dir, InstanceLayout};
 #[cfg(feature = "socket-mode")]
@@ -79,6 +79,28 @@ pub(crate) const HOST_AGENT_OWNER: &str = "ag_orchestrator";
 /// top-N). The limit is applied after eligibility filtering.
 pub(crate) const MEMORY_INJECTION_LIMIT: usize = 5;
 
+/// Lay down the product's memory taxonomy (category directories + the reserved
+/// `INDEX.md` map) under the orchestrator memory root. Idempotent, so every
+/// startup re-asserts the structure without disturbing existing notes; fail-soft,
+/// because a malformed category list (a product config bug) or an IO error is
+/// worth logging but must never stop the daemon from serving.
+fn scaffold_memory_taxonomy(groups_dir: &Path, owner: &str, categories: &[String]) {
+    if categories.is_empty() {
+        return;
+    }
+    let taxonomy = match assistant_memory::Taxonomy::new(categories.iter().cloned()) {
+        Ok(taxonomy) => taxonomy,
+        Err(e) => {
+            eprintln!("memory taxonomy not scaffolded ({e})");
+            return;
+        }
+    };
+    let root = assistant_memory::MemoryRoot::orchestrator(groups_dir, owner);
+    if let Err(e) = taxonomy.scaffold(&root) {
+        eprintln!("memory taxonomy scaffold failed ({e})");
+    }
+}
+
 /// Product-supplied inputs for a run. The product knows its namespace and the
 /// session to attach to; the platform derives the on-disk layout and wires the
 /// runtime/auth path.
@@ -92,6 +114,9 @@ pub struct RunOptions {
     pub once: bool,
     /// Stub (echo, no creds) or real Claude OAuth (OneCLI-gated).
     pub mode: RunnerAuthMode,
+    /// The product's memory categories. Scaffolded (idempotently) onto the
+    /// orchestrator memory root at startup; empty disables scaffolding.
+    pub memory_taxonomy: Vec<String>,
 }
 
 /// Serve terminal turns until stdin closes. Equivalent to [`run`] with
@@ -121,6 +146,11 @@ fn run_inner(opts: RunOptions) -> Result<(), HostError> {
 
     let instance_layout = InstanceLayout::derive(&home, &opts.namespace, opts.instance.as_deref())
         .map_err(|e| HostError::Layout(e.to_string()))?;
+    scaffold_memory_taxonomy(
+        &instance_layout.groups_dir(),
+        HOST_AGENT_OWNER,
+        &opts.memory_taxonomy,
+    );
     let sessions_dir = instance_layout.sessions_dir();
     let session_layout = SessionLayout::derive(&sessions_dir, &opts.group, &opts.session)?;
 
@@ -188,6 +218,9 @@ pub struct SlackRunOptions {
     /// any of them by `route_name`; each runs in its own custom image. Empty
     /// disables delegation (the orchestrator gets no `delegate` tool).
     pub specialists: Vec<SpecialistSpec>,
+    /// The product's memory categories. Scaffolded (idempotently) onto the
+    /// orchestrator memory root at startup; empty disables scaffolding.
+    pub memory_taxonomy: Vec<String>,
 }
 
 /// Serve Slack turns over Socket Mode until the process is signalled, returning a
@@ -214,6 +247,11 @@ fn run_slack_inner(opts: SlackRunOptions) -> Result<(), HostError> {
         .ok_or_else(|| HostError::Layout("HOME is not set; pass --home <path>".to_string()))?;
     let instance_layout = InstanceLayout::derive(&home, &opts.namespace, opts.instance.as_deref())
         .map_err(|e| HostError::Layout(e.to_string()))?;
+    scaffold_memory_taxonomy(
+        &instance_layout.groups_dir(),
+        HOST_AGENT_OWNER,
+        &opts.memory_taxonomy,
+    );
     let sessions_dir = instance_layout.sessions_dir();
 
     let onecli = onecli::probe(&instance_layout);

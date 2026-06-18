@@ -21,9 +21,9 @@ pub struct Product {
     pub product_root: PathBuf,
     /// The specialists this product registers (e.g. the browser specialist).
     pub specialists: Vec<SpecialistSpec>,
-    /// The product's memory categories. Not yet consumed by `run()` — kept so
-    /// the per-product taxonomy decision survives until memory scaffolding wires
-    /// it up (deferred).
+    /// The product's memory categories. Scaffolded (idempotently) onto the
+    /// orchestrator memory root when a `run`/`serve-slack` session starts: the
+    /// category directories plus the reserved `INDEX.md` map.
     pub memory_taxonomy: Vec<&'static str>,
 }
 
@@ -370,6 +370,7 @@ pub fn run(product: Product) -> i32 {
             group,
             mode,
             proxy_url,
+            memory_taxonomy: product.memory_taxonomy.iter().map(|s| s.to_string()).collect(),
             specialists: product.specialists,
         });
         return code;
@@ -492,6 +493,7 @@ pub fn run(product: Product) -> i32 {
             session,
             once,
             mode,
+            memory_taxonomy: product.memory_taxonomy.iter().map(|s| s.to_string()).collect(),
         });
         return code;
     }

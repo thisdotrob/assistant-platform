@@ -19,7 +19,9 @@ use std::path::{Component, Path};
 use crate::root::{IsolationError, MemoryRoot};
 
 /// The deterministic index file written at the root of a scaffolded taxonomy.
-const INDEX_FILE: &str = "INDEX.md";
+/// Reserved: it is rejected as a category name and skipped by the reindex walk
+/// (it is a taxonomy map, not a memory entry).
+pub(crate) const INDEX_FILE: &str = "INDEX.md";
 
 /// A category name was rejected, or appeared twice.
 #[derive(Clone, Debug, PartialEq, Eq)]
