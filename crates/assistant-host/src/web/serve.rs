@@ -1,9 +1,11 @@
 //! Composition for the operator web UI: build the route table over
 //! [`HostWebApp`] and issue/load the bearer token.
 //!
-//! The page routes ([`assistant_web::pages`]) and the memory browser/editor
-//! routes ([`assistant_web::memory_api`]) register onto one `Router<HostWebApp>`
-//! because the host type satisfies both `WebApp` and `MemoryApp`.
+//! The HTML dashboard ([`assistant_web::ui`]), the clickable memory editor
+//! ([`assistant_web::ui_memory`]), the JSON read API ([`assistant_web::pages`]),
+//! and the JSON memory routes ([`assistant_web::memory_api`]) all register onto
+//! one `Router<HostWebApp>` because the host type satisfies both `WebApp` and
+//! `MemoryApp`.
 
 use std::io;
 use std::path::Path;
@@ -17,6 +19,8 @@ use crate::web::HostWebApp;
 /// the host's central-DB- and memory-backed [`HostWebApp`].
 pub fn build_router() -> Router<HostWebApp> {
     let mut router = Router::new();
+    assistant_web::ui::register(&mut router);
+    assistant_web::ui_memory::register(&mut router);
     assistant_web::pages::register(&mut router);
     assistant_web::memory_api::register(&mut router);
     router

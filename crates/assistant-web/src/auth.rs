@@ -193,6 +193,33 @@ pub fn query_token(query: &str) -> Option<String> {
         .map(|(_, v)| v.to_string())
 }
 
+/// The cookie that carries the browser session credential after a one-time
+/// `?token=` link is exchanged. Steady-state browser auth rides on this; the
+/// secret never appears in a URL again.
+pub const SESSION_COOKIE: &str = "web_session";
+
+/// Pull the session token out of a `Cookie` header value
+/// (`a=1; web_session=XYZ; b=2`). Cookie pairs are `;`-separated.
+pub fn cookie_token(cookie_header: &str) -> Option<&str> {
+    cookie_header
+        .split(';')
+        .filter_map(|p| p.trim().split_once('='))
+        .find(|(k, _)| *k == SESSION_COOKIE)
+        .map(|(_, v)| v)
+        .filter(|v| !v.is_empty())
+}
+
+/// Build the `Set-Cookie` value that establishes the browser session on the
+/// exchange redirect. `HttpOnly` keeps it out of JavaScript, `SameSite=Strict`
+/// stops it riding cross-site requests (the CSRF basis), `Path=/` scopes it to
+/// the whole UI, and `Max-Age` bounds its life so a stale tab re-auths. No
+/// `Secure`: the UI is loopback-only HTTP, where `Secure` would suppress the
+/// cookie entirely.
+pub fn session_cookie(token: &str) -> String {
+    const MAX_AGE_SECS: u32 = 12 * 60 * 60;
+    format!("{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={MAX_AGE_SECS}")
+}
+
 /// Rebuild a query string with any `token` param removed, so a one-time link
 /// can be stripped before it is stored anywhere. Returns `""` when nothing else
 /// remains.
@@ -359,6 +386,27 @@ mod tests {
         assert_eq!(strip_token_query("a=1&token=XYZ&b=2"), "a=1&b=2");
         assert_eq!(strip_token_query("token=XYZ"), "");
         assert_eq!(strip_token_query(""), "");
+    }
+
+    #[test]
+    fn cookie_token_is_parsed_from_the_session_pair() {
+        assert_eq!(cookie_token("web_session=XYZ"), Some("XYZ"));
+        assert_eq!(cookie_token("a=1; web_session=XYZ; b=2"), Some("XYZ"));
+        assert_eq!(cookie_token("a=1; b=2"), None);
+        assert_eq!(cookie_token("web_session="), None);
+        assert_eq!(cookie_token(""), None);
+    }
+
+    #[test]
+    fn session_cookie_is_httponly_samesite_strict_and_path_scoped() {
+        let c = session_cookie("the-secret");
+        assert!(c.starts_with("web_session=the-secret;"));
+        assert!(c.contains("HttpOnly"));
+        assert!(c.contains("SameSite=Strict"));
+        assert!(c.contains("Path=/"));
+        assert!(c.contains("Max-Age="));
+        // Loopback HTTP: must NOT be Secure or the browser drops it.
+        assert!(!c.contains("Secure"));
     }
 
     #[test]

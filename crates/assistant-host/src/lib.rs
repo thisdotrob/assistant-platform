@@ -348,11 +348,18 @@ fn run_web_inner(opts: WebRunOptions) -> Result<i32, HostError> {
     }
 
     let port = opts.port.unwrap_or(config.web.port);
-    // Loopback only: this admin surface must never be reachable off-box.
+    // Loopback only: this admin surface must never be reachable off-box. The
+    // allowlisted origins are the two loopback names a browser uses for this
+    // port — the server-side half of the cookie CSRF defense, so a clickable
+    // page can drive the mutating memory-editor routes while a foreign site
+    // (which cannot forge `Origin`) cannot.
     let settings = assistant_web::ServerSettings {
         bind: "127.0.0.1".to_string(),
         port,
-        allowed_origins: Vec::new(),
+        allowed_origins: vec![
+            format!("http://127.0.0.1:{port}"),
+            format!("http://localhost:{port}"),
+        ],
     };
 
     let (store, minted) =
@@ -375,21 +382,28 @@ fn run_web_inner(opts: WebRunOptions) -> Result<i32, HostError> {
     let listener = web::bind(&settings).map_err(HostError::Io)?;
     let bound = listener.local_addr().map_err(HostError::Io)?;
 
-    eprintln!("web UI listening on http://{bound} (loopback, Bearer-authenticated JSON API)");
+    eprintln!("web UI listening on http://{bound} (loopback; HTML dashboard + Bearer JSON API)");
     match &minted {
         Some(token) => {
             // The plaintext secret exists only now (first run). Surface it once so
             // the operator can authenticate; thereafter only its hash survives.
             eprintln!("web token (shown once): {}", token.expose());
             eprintln!(
-                "  e.g. curl -H 'Authorization: Bearer {}' http://{}/api/overview",
+                "  open in a browser: http://{}/?token={}",
+                bound,
+                token.expose()
+            );
+            eprintln!("    (the one-time ?token= is exchanged for a session cookie, then stripped from the URL)");
+            eprintln!(
+                "  or via curl: curl -H 'Authorization: Bearer {}' http://{}/api/overview",
                 token.expose(),
                 bound
             );
         }
         None => eprintln!(
-            "reusing the existing web token from {} (delete it to mint a new one)",
-            layout.web_token_path().display()
+            "reusing the existing web token from {} — open http://{}/?token=<secret> to log in (delete the file to mint a new one)",
+            layout.web_token_path().display(),
+            bound
         ),
     }
 

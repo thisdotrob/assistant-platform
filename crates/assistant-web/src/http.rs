@@ -132,6 +132,14 @@ impl Response {
             .with_body_bytes(body.into().into_bytes())
     }
 
+    /// An HTML body. The caller is responsible for escaping any interpolated
+    /// data (see `ui::esc`) before building the document.
+    pub fn html(status: u16, body: impl Into<String>) -> Self {
+        Response::new(status)
+            .with_header("Content-Type", "text/html; charset=utf-8")
+            .with_body_bytes(body.into().into_bytes())
+    }
+
     /// A 303 redirect (used after a one-time token exchange so the browser
     /// re-requests the clean URL).
     pub fn redirect(location: impl Into<String>) -> Self {
@@ -192,5 +200,13 @@ mod tests {
         let resp = Response::redirect("/dashboard");
         assert_eq!(resp.status, 303);
         assert_eq!(resp.header("location"), Some("/dashboard"));
+    }
+
+    #[test]
+    fn html_response_sets_content_type() {
+        let resp = Response::html(200, "<h1>hi</h1>");
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.header("content-type"), Some("text/html; charset=utf-8"));
+        assert_eq!(resp.body, b"<h1>hi</h1>");
     }
 }
