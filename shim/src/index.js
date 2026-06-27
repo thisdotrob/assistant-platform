@@ -27,8 +27,9 @@ function sleep(ms) {
 }
 
 // Resolve the per-message responder for the active mode. Both modes return the
-// same shape — `{ text, scheduled }` — so the loop emits a turn's reply and any
-// scheduling requests as one atomic batch regardless of mode. The Claude path is
+// same shape — `{ text, scheduled, cancellations, memories, delegations }` — so
+// the loop emits a turn's reply and any side-effect requests as one atomic batch
+// regardless of mode. The Claude path is
 // imported lazily so stub mode never loads (or requires) the Agent SDK.
 // `memory` is the host-injected `<retrieved_memories>` block (or null); only the
 // Claude path consumes it — echo mode just proves plumbing.
@@ -41,7 +42,12 @@ async function buildResponder() {
     const { runSpecialistTurn } = await import('./specialist.js');
     return (content) => runSpecialistTurn(content);
   }
-  return async (content) => ({ text: `echo: ${content}`, scheduled: [], memories: [] });
+  return async (content) => ({
+    text: `echo: ${content}`,
+    scheduled: [],
+    cancellations: [],
+    memories: [],
+  });
 }
 
 async function main() {
@@ -118,6 +124,9 @@ async function main() {
         kind: 'schedule_message',
         content: JSON.stringify(s),
       }));
+      for (const cancellation of result.cancellations ?? []) {
+        rows.push({ kind: 'cancel_schedule', content: JSON.stringify(cancellation) });
+      }
       for (const memory of result.memories ?? []) {
         rows.push({ kind: 'save_memory', content: JSON.stringify(memory) });
       }

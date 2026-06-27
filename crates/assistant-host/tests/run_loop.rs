@@ -229,6 +229,73 @@ fn catalog_memory_is_injected_into_inbound_metadata() {
 }
 
 #[test]
+fn active_schedules_block_is_injected_into_inbound_metadata() {
+    use assistant_db::{apply, baseline_migrations, baseline_owner_modules, open_central, MigrationSet};
+    use assistant_scheduler::{upsert_item, ContextPolicy, ScheduleIntent, ScheduledMessageMeta};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let sessions = tmp.path().join("sessions");
+    let central = tmp.path().join("main.db");
+    let layout = SessionLayout::derive(&sessions, "orchestrator", "sched-inject").unwrap();
+    init_session(&layout).unwrap();
+
+    // Baseline + memory catalog (so memory retrieval returns cleanly empty) +
+    // scheduler tables, then seed one active item bound to this agent group. No
+    // catalog entry is seeded, so the only context block is the schedules one.
+    {
+        let order: Vec<String> = baseline_owner_modules().into_iter().map(str::to_string).collect();
+        let mut conn = open_central(&central).unwrap();
+        apply(&mut conn, &baseline_migrations(order)).unwrap();
+        let mut domain = MigrationSet::new(vec![
+            assistant_memory::MODULE_ID.to_string(),
+            assistant_scheduler::MODULE_ID.to_string(),
+        ]);
+        for migration in
+            assistant_memory::migrations().into_iter().chain(assistant_scheduler::migrations())
+        {
+            domain.add(migration);
+        }
+        apply(&mut conn, &domain).unwrap();
+
+        let meta = ScheduledMessageMeta::create(
+            1,
+            ScheduleIntent { created_by: "U1".into(), summary: "Stretch break".into(), created_at: 1 },
+            4_000_000_000, // far future, so it renders as upcoming
+            None,
+            ContextPolicy::CurrentMemory,
+        )
+        .unwrap();
+        upsert_item(&conn, &meta, Some("sched-inject")).unwrap();
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let shim = spawn_fake_shim(layout.clone(), stop.clone());
+
+    let groups = tmp.path().join("groups");
+    let config = test_config(vec![sessions], RunnerAuthMode::Stub, ready())
+        .with_memory(central, 1, 5, groups, "host".to_string());
+    let mut host = Host::new(layout.clone(), FakeRuntime::new(), config);
+
+    let mut out: Vec<u8> = Vec::new();
+    host.process_turn("hello", &mut out).unwrap();
+    host.shutdown().unwrap();
+    stop.store(true, Ordering::Relaxed);
+    shim.join().unwrap();
+
+    // The host injected an `<active_schedules>` block carrying the item's id and
+    // summary into the inbound metadata (seq 0). The shim consuming it is the
+    // live-only tail; here we assert the host wired it through.
+    let conn = rusqlite::Connection::open(layout.inbound_db_path()).unwrap();
+    let metadata: Option<String> = conn
+        .query_row("SELECT metadata FROM messages_in WHERE seq = 0", [], |row| row.get(0))
+        .unwrap();
+    let metadata = metadata.expect("active_schedules block should be injected");
+    assert!(metadata.contains("<active_schedules>"), "got {metadata:?}");
+    assert!(metadata.contains("Stretch break"), "got {metadata:?}");
+    assert!(metadata.contains("id=sched_"), "got {metadata:?}");
+}
+
+#[test]
 fn scheduler_sweep_fires_due_item_once_and_expires_sticky() {
     use assistant_db::{apply, baseline_migrations, baseline_owner_modules, open_central, MigrationSet};
     use assistant_router::open_sticky;

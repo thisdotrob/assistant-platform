@@ -222,6 +222,20 @@ pub fn complete_item(conn: &Connection, scheduled_item_id: &str) -> Result<(), P
     Ok(())
 }
 
+/// Cancel a schedule by id — a terminal transition that drops it from
+/// [`claim_due`]'s swept set so it never fires again. Scoped to an `active` or
+/// `paused` row so a `completed` or already-`cancelled` item is a no-op (cancel
+/// is terminal and idempotent), matching the `{Active,Paused} -> Cancelled`
+/// lifecycle rule. A no-op if the item is absent.
+pub fn cancel_item(conn: &Connection, scheduled_item_id: &str) -> Result<(), ProjectionError> {
+    conn.execute(
+        "UPDATE scheduled_items SET status = 'cancelled' \
+         WHERE id = ?1 AND status IN ('active', 'paused')",
+        rusqlite::params![scheduled_item_id],
+    )?;
+    Ok(())
+}
+
 const ITEM_COLUMNS: &str =
     "id, agent_group_id, session_id, intent, process_after, recurrence, status, revision";
 
@@ -515,6 +529,56 @@ mod tests {
 
         // An unknown id is a no-op.
         complete_item(&conn, "sched_missing").unwrap();
+        assert_eq!(item_status(&conn, "sched_missing").unwrap(), None);
+    }
+
+    #[test]
+    fn cancel_item_marks_active_or_paused_cancelled_only() {
+        let conn = db();
+
+        // An active item cancels and drops out of the swept active listing.
+        let active = meta(9, "active", 1_000, true);
+        upsert_item(&conn, &active, Some("sess-1")).unwrap();
+        cancel_item(&conn, &active.scheduled_item_id).unwrap();
+        assert_eq!(
+            item_status(&conn, &active.scheduled_item_id).unwrap(),
+            Some(ScheduleStatus::Cancelled)
+        );
+        assert!(list_items(&conn, 9, Some(ScheduleStatus::Active))
+            .unwrap()
+            .is_empty());
+
+        // A paused item is cancellable too (the terminal verb wins).
+        let mut paused = meta(9, "held", 2_000, false);
+        paused
+            .transition(crate::model::LifecycleTransition::Pause)
+            .unwrap();
+        upsert_item(&conn, &paused, None).unwrap();
+        cancel_item(&conn, &paused.scheduled_item_id).unwrap();
+        assert_eq!(
+            item_status(&conn, &paused.scheduled_item_id).unwrap(),
+            Some(ScheduleStatus::Cancelled)
+        );
+
+        // Cancel is idempotent on an already-cancelled row.
+        cancel_item(&conn, &active.scheduled_item_id).unwrap();
+        assert_eq!(
+            item_status(&conn, &active.scheduled_item_id).unwrap(),
+            Some(ScheduleStatus::Cancelled)
+        );
+
+        // A completed item is never resurrected into cancelled.
+        let done = meta(9, "done", 3_000, false);
+        upsert_item(&conn, &done, None).unwrap();
+        complete_item(&conn, &done.scheduled_item_id).unwrap();
+        cancel_item(&conn, &done.scheduled_item_id).unwrap();
+        assert_eq!(
+            item_status(&conn, &done.scheduled_item_id).unwrap(),
+            Some(ScheduleStatus::Completed)
+        );
+
+        // An unknown id is a no-op.
+        cancel_item(&conn, "sched_missing").unwrap();
         assert_eq!(item_status(&conn, "sched_missing").unwrap(), None);
     }
 

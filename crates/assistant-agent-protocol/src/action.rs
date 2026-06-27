@@ -59,6 +59,14 @@ pub enum OutboundAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
     },
+    /// Cancel a previously scheduled item by its `scheduled_item_id` (which the
+    /// agent reads from the host-injected `<active_schedules>` context block).
+    /// Not a user-visible send: the host marks the item cancelled as a side
+    /// effect, so the run's final text still delivers the user-facing
+    /// confirmation.
+    CancelSchedule {
+        scheduled_item_id: String,
+    },
 }
 
 impl OutboundAction {
@@ -90,6 +98,7 @@ impl OutboundAction {
             OutboundAction::AddReaction { .. } => "add_reaction",
             OutboundAction::ScheduleMessage { .. } => "schedule_message",
             OutboundAction::SaveMemory { .. } => "save_memory",
+            OutboundAction::CancelSchedule { .. } => "cancel_schedule",
         }
     }
 }
@@ -163,6 +172,9 @@ mod tests {
                 content: "no title here".into(),
                 title: None,
             },
+            OutboundAction::CancelSchedule {
+                scheduled_item_id: "sched_abc123".into(),
+            },
         ];
         for action in actions {
             let json = serde_json::to_string(&action).unwrap();
@@ -199,6 +211,11 @@ mod tests {
         assert!(!OutboundAction::SaveMemory {
             content: "c".into(),
             title: None,
+        }
+        .is_user_visible_send());
+        // Cancelling a schedule is a side effect, not the run's visible reply.
+        assert!(!OutboundAction::CancelSchedule {
+            scheduled_item_id: "sched_abc123".into(),
         }
         .is_user_visible_send());
     }

@@ -35,8 +35,8 @@ use assistant_router::{
 };
 use assistant_runtime_docker::ContainerRuntime;
 use assistant_scheduler::{
-    advance_recurrence, claim_due, complete_item, complete_occurrence, list_items, upsert_item,
-    ContextPolicy, EpochSecs, Occurrence, ProjectedItem, ProjectionError, Recurrence,
+    advance_recurrence, cancel_item, claim_due, complete_item, complete_occurrence, list_items,
+    upsert_item, ContextPolicy, EpochSecs, Occurrence, ProjectedItem, ProjectionError, Recurrence,
     ScheduleIntent, ScheduleStatus, ScheduledMessageMeta,
 };
 use assistant_session::{InboundMessage, OutboundMessage, SessionLayout};
@@ -818,8 +818,8 @@ struct SchedulePayload {
 }
 
 /// Deliver one reply to Slack, or — when it is a side-effect action
-/// (`schedule_message`, `save_memory`) — perform that side effect instead of
-/// posting it. These actions are never user-visible text, so the raw payload
+/// (`schedule_message`, `cancel_schedule`, `save_memory`) — perform that side
+/// effect instead of posting it. These actions are never user-visible text, so the raw payload
 /// must not be delivered; the run's own confirmation text (a separate reply) is
 /// what the user sees. Failures are logged, not retried, matching the rest of
 /// the loop.
@@ -837,6 +837,12 @@ fn deliver_reply<A>(
     if reply.kind == "schedule_message" {
         if let Err(err) = create_schedule(conn, session_id, &reply.content) {
             eprintln!("slack: scheduling a message from a turn in channel {session_id} failed: {err}");
+        }
+        return;
+    }
+    if reply.kind == "cancel_schedule" {
+        if let Err(err) = cancel_schedule(conn, &reply.content) {
+            eprintln!("slack: cancelling a schedule from a turn in channel {session_id} failed: {err}");
         }
         return;
     }
@@ -909,6 +915,26 @@ fn create_schedule(conn: &Connection, session_id: &str, payload: &str) -> Result
     )
     .map_err(|e| e.to_string())?;
     upsert_item(conn, &meta, Some(session_id)).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// The wire payload an agent's `cancel_schedule` action carries in its outbound
+/// `content` (the serde body of
+/// [`assistant_agent_protocol::OutboundAction::CancelSchedule`]). The id is one
+/// the agent read from the host-injected `<active_schedules>` block.
+#[derive(serde::Deserialize)]
+struct CancelSchedulePayload {
+    scheduled_item_id: String,
+}
+
+/// Cancel a scheduled item an agent's `cancel_schedule` action named. A terminal
+/// transition on the central index, matching [`create_schedule`]'s central-only
+/// projection; an unknown or already-terminal id is a silent no-op (see
+/// [`assistant_scheduler::cancel_item`]).
+fn cancel_schedule(conn: &Connection, payload: &str) -> Result<(), String> {
+    let payload: CancelSchedulePayload =
+        serde_json::from_str(payload).map_err(|e| format!("bad cancel_schedule payload: {e}"))?;
+    cancel_item(conn, &payload.scheduled_item_id).map_err(|e| e.to_string())?;
     Ok(())
 }
 

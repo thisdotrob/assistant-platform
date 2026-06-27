@@ -19,7 +19,9 @@ use std::path::Path;
 
 use assistant_router::expire_sticky;
 use assistant_runtime_docker::ContainerRuntime;
-use assistant_scheduler::{claim_due, complete_occurrence, list_items, ProjectedItem};
+use assistant_scheduler::{
+    claim_due, complete_occurrence, list_items, ProjectedItem, Recurrence, ScheduleStatus,
+};
 use assistant_session::{InboundMessage, SessionLayout};
 use rusqlite::Connection;
 
@@ -127,4 +129,128 @@ where
     }
 
     Ok(SweepReport { expired_sticky, fired })
+}
+
+/// Render an agent group's active scheduled items as an `<active_schedules>`
+/// context block for injection into a turn's inbound metadata, or `None` when it
+/// has none (so an empty block is never injected). Each line carries the item's
+/// id — which the agent passes to `cancel_schedule` to cancel it — its intent
+/// summary, the next due time relative to `now`, and its recurrence. Scoped to a
+/// single `agent_group_id` (the instance is the isolation boundary) and capped at
+/// `limit` items, taking the soonest-due first (the projection lists in due
+/// order). Read-only and fail-soft at the call site: a query error yields `None`.
+pub fn render_active_schedules_block(
+    conn: &Connection,
+    agent_group_id: i64,
+    now: i64,
+    limit: usize,
+) -> Option<String> {
+    let items = list_items(conn, agent_group_id, Some(ScheduleStatus::Active)).ok()?;
+    if items.is_empty() {
+        return None;
+    }
+    let mut block = String::from(
+        "<active_schedules>\nYour active scheduled items. To cancel one, call cancel_schedule with its id.\n",
+    );
+    for item in items.iter().take(limit) {
+        block.push_str(&render_schedule_line(item, now));
+        block.push('\n');
+    }
+    block.push_str("</active_schedules>");
+    Some(block)
+}
+
+/// One `- id=… | "summary" | next: … | …` line for a projected item.
+fn render_schedule_line(item: &ProjectedItem, now: i64) -> String {
+    let summary = item.intent.replace('\n', " ");
+    let due = match item.process_after {
+        None => "unscheduled".to_string(),
+        Some(t) if t <= now => "due now".to_string(),
+        Some(t) => format!("in {}", human_duration(t - now)),
+    };
+    let recurrence = match &item.recurrence {
+        None => "one-off".to_string(),
+        Some(Recurrence::Every { seconds }) => format!("repeats every {}", human_duration(*seconds)),
+    };
+    format!("- id={} | \"{summary}\" | next: {due} | {recurrence}", item.id)
+}
+
+/// A compact human duration for a non-negative second count (largest whole unit:
+/// seconds, minutes, hours, then days). Used only for display in the schedules
+/// block, so coarse rounding is fine.
+fn human_duration(secs: i64) -> String {
+    let s = secs.max(0);
+    if s < 60 {
+        format!("{s}s")
+    } else if s < 3_600 {
+        format!("{}m", s / 60)
+    } else if s < 86_400 {
+        format!("{}h", s / 3_600)
+    } else {
+        format!("{}d", s / 86_400)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assistant_db::{apply, baseline_migrations, baseline_owner_modules};
+    use assistant_scheduler::{upsert_item, ContextPolicy, Recurrence, ScheduleIntent, ScheduledMessageMeta};
+
+    fn central() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let order: Vec<String> = baseline_owner_modules().into_iter().map(str::to_string).collect();
+        let mut set = baseline_migrations(order);
+        for m in assistant_scheduler::migrations() {
+            set.add(m);
+        }
+        apply(&mut conn, &set).unwrap();
+        conn
+    }
+
+    fn seed(conn: &Connection, group: i64, summary: &str, due: i64, every: Option<i64>) -> String {
+        let meta = ScheduledMessageMeta::create(
+            group,
+            ScheduleIntent { created_by: "u".into(), summary: summary.into(), created_at: 0 },
+            due,
+            every.map(|seconds| Recurrence::Every { seconds }),
+            ContextPolicy::default(),
+        )
+        .unwrap();
+        upsert_item(conn, &meta, Some("C1")).unwrap();
+        meta.scheduled_item_id
+    }
+
+    #[test]
+    fn no_active_items_renders_no_block() {
+        let conn = central();
+        assert!(render_active_schedules_block(&conn, 1, 1_000, 5).is_none());
+    }
+
+    #[test]
+    fn active_items_render_id_summary_due_and_recurrence() {
+        let conn = central();
+        let one_off = seed(&conn, 1, "Stretch", 1_300, None);
+        let recurring = seed(&conn, 1, "Standup nudge", 4_600, Some(86_400));
+        // An item for another agent group must not leak into this block.
+        seed(&conn, 2, "other agent", 1_100, None);
+
+        let block = render_active_schedules_block(&conn, 1, 1_000, 5).unwrap();
+        assert!(block.contains("<active_schedules>") && block.contains("</active_schedules>"));
+        assert!(block.contains(&format!("id={one_off}")));
+        assert!(block.contains("\"Stretch\" | next: in 5m | one-off"));
+        assert!(block.contains(&format!("id={recurring}")));
+        assert!(block.contains("\"Standup nudge\" | next: in 1h | repeats every 1d"));
+        assert!(!block.contains("other agent"), "cross-agent item must not appear");
+    }
+
+    #[test]
+    fn cap_limits_lines_to_the_soonest_due() {
+        let conn = central();
+        let soon = seed(&conn, 1, "soon", 1_010, None);
+        seed(&conn, 1, "later", 9_000, None);
+        let block = render_active_schedules_block(&conn, 1, 1_000, 1).unwrap();
+        assert!(block.contains(&format!("id={soon}")));
+        assert!(!block.contains("\"later\""), "cap must drop the later item");
+    }
 }

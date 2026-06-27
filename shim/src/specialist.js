@@ -26,8 +26,8 @@
 //   - ASSISTANT_SPECIALIST_MAX_TURNS     : integer per-turn step ceiling.
 //
 // The result shape matches the orchestrator responder (`{ text, scheduled,
-// memories }`) so the runner loop emits it with no special-casing. A specialist
-// requests no schedules and saves no memories.
+// cancellations, memories }`) so the runner loop emits it with no special-casing.
+// A specialist requests no schedules, cancels nothing, and saves no memories.
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
@@ -62,9 +62,9 @@ export function specialistOptionsFromEnv(env) {
   return { systemPrompt, tools, allowedTools, maxTurns };
 }
 
-// Run one specialist turn over `goal`. Returns `{ text, scheduled, memories }`
-// like the orchestrator responder; a specialist never schedules or saves memory,
-// so those are always empty.
+// Run one specialist turn over `goal`. Returns `{ text, scheduled, cancellations,
+// memories }` like the orchestrator responder; a specialist never schedules,
+// cancels, or saves memory, so those are always empty.
 export async function runSpecialistTurn(goal) {
   const { systemPrompt, tools, allowedTools, maxTurns } = specialistOptionsFromEnv(process.env);
 
@@ -97,5 +97,5 @@ export async function runSpecialistTurn(goal) {
       if (segment.trim().length > 0) segments.push(segment.trim());
     }
   }
-  return { text: segments.join('\n\n'), scheduled: [], memories: [] };
+  return { text: segments.join('\n\n'), scheduled: [], cancellations: [], memories: [] };
 }

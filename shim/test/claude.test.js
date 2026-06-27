@@ -39,6 +39,14 @@ test('specialistsFromEnv drops entries missing a string name or description', ()
   assert.deepEqual(out, [{ name: 'browser', description: 'ok' }]);
 });
 
+test('buildSystemPrompt advertises cancel_schedule and how to read ids from <active_schedules>', () => {
+  const prompt = buildSystemPrompt([]);
+  assert.match(prompt, /- cancel_schedule:/);
+  assert.match(prompt, /<active_schedules>/);
+  // Guards against fabricating an id to cancel.
+  assert.match(prompt, /Never invent an id/);
+});
+
 test('buildSystemPrompt omits delegation framing when no specialists are registered', () => {
   const prompt = buildSystemPrompt([]);
   assert.doesNotMatch(prompt, /- delegate:/);

@@ -8,7 +8,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use assistant_agent_protocol::{check_runner_protocol, RUNNER_PROTOCOL_VERSION};
 use assistant_channel_cli::{local_sender, render_message};
@@ -339,13 +339,13 @@ where
         Ok(())
     }
 
-    /// The rendered `<retrieved_memories>` block to inject for this turn, or
-    /// `None` when memory injection is disabled, the caller already set metadata,
-    /// nothing eligible matched, or retrieval failed (fail-open — never an
-    /// error). When a healthy qmd sidecar is configured the block is its relevance
-    /// ranking (with snippets); otherwise — and on any degraded qmd state — it is
-    /// the unranked catalog floor.
-    fn memory_block(&self, inbound: &InboundMessage) -> Option<String> {
+    /// The combined context preamble to inject into this turn's inbound metadata,
+    /// or `None` when memory injection is disabled, the caller already set
+    /// metadata, or nothing composed. Concatenates (blank-line separated) the
+    /// memory block and the agent's `<active_schedules>` block — both optional —
+    /// from a single central-DB connection. The shim prepends the whole thing as
+    /// context ahead of the user's message. Fail-open: a DB error skips injection.
+    fn context_block(&self, inbound: &InboundMessage) -> Option<String> {
         let cfg = self.config.memory.as_ref()?;
         if inbound.metadata.is_some() {
             return None;
@@ -353,14 +353,45 @@ where
         let conn = match open_central(&cfg.central_db_path) {
             Ok(conn) => conn,
             Err(e) => {
-                eprintln!("memory injection skipped (open central db: {e})");
+                eprintln!("context injection skipped (open central db: {e})");
                 return None;
             }
         };
+
+        let mut blocks: Vec<String> = Vec::new();
+        if let Some(block) = self.memory_block(cfg, &conn, &inbound.content) {
+            blocks.push(block);
+        }
+        // The agent's active schedules, so it can answer "what's scheduled?" and
+        // knows each item's id to pass to cancel_schedule. Agent-group scoped (the
+        // instance is the isolation boundary), capped at the same limit as memory.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if let Some(block) =
+            crate::scheduler::render_active_schedules_block(&conn, cfg.agent_group_id, now, cfg.limit)
+        {
+            blocks.push(block);
+        }
+
+        if blocks.is_empty() {
+            None
+        } else {
+            Some(blocks.join("\n\n"))
+        }
+    }
+
+    /// The rendered `<retrieved_memories>` block for this turn, or `None` when
+    /// nothing eligible matched or retrieval failed (fail-open — never an error).
+    /// When a healthy qmd sidecar is configured the block is its relevance ranking
+    /// (with snippets); otherwise — and on any degraded qmd state — it is the
+    /// unranked catalog floor. The caller owns opening the central connection.
+    fn memory_block(&self, cfg: &MemoryRetrieval, conn: &Connection, query: &str) -> Option<String> {
         // Semantic layer first: when qmd is configured and healthy its ranked
         // result is authoritative (even an empty one suppresses injection). Only
         // a degraded/unconfigured qmd falls through to the catalog-only floor.
-        if let Some(block) = self.qmd_memory_block(cfg, &conn, &inbound.content) {
+        if let Some(block) = self.qmd_memory_block(cfg, conn, query) {
             return block;
         }
         // Retrieval is intentionally unscoped: the isolation boundary is the
@@ -368,14 +399,14 @@ where
         // scope. A default context selects every `all_chats` entry for the agent
         // group — which is all the host writes. The scope-filtering machinery in
         // `assistant_memory` is kept as latent capability, not a TODO to finish here.
-        let envelopes =
-            match retrieve(&conn, cfg.agent_group_id, &RetrievalContext::default(), cfg.limit) {
-                Ok(envelopes) => envelopes,
-                Err(e) => {
-                    eprintln!("memory injection skipped ({e})");
-                    return None;
-                }
-            };
+        let envelopes = match retrieve(conn, cfg.agent_group_id, &RetrievalContext::default(), cfg.limit)
+        {
+            Ok(envelopes) => envelopes,
+            Err(e) => {
+                eprintln!("memory injection skipped ({e})");
+                return None;
+            }
+        };
         // Catalog retrieval yields metadata-only envelopes; read each entry's
         // body off disk so the injected block carries the remembered text. This
         // is what qmd would otherwise supply via ranked snippets.
@@ -443,12 +474,12 @@ where
     ) -> Result<Vec<OutboundMessage>, HostError> {
         self.ensure_started()?;
 
-        // Pre-reply memory: load eligible catalog entries and carry the rendered
-        // block in the inbound metadata (the shim injects it as context). A
-        // caller that already set metadata is left untouched. Fail-open — a
+        // Pre-reply context: load the memory block + the active-schedules block
+        // and carry them in the inbound metadata (the shim injects it as context).
+        // A caller that already set metadata is left untouched. Fail-open — a
         // retrieval error never blocks the turn.
         let enriched;
-        let inbound = match self.memory_block(inbound) {
+        let inbound = match self.context_block(inbound) {
             Some(block) => {
                 enriched = InboundMessage {
                     metadata: Some(block),

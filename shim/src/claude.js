@@ -8,7 +8,7 @@
 // so we pass `process.env` through and never touch the credential here.
 //
 // The tools exposed are in-process SDK MCP tools (`schedule_message`,
-// `save_memory`): each handler records the request rather than emitting, so the
+// `cancel_schedule`, `save_memory`): each handler records the request rather than emitting, so the
 // runner can write the side-effect actions and the reply text as one atomic
 // outbound batch after the turn (see index.js) — a host poll never observes a
 // partial turn. The host intercepts those rows (records a scheduled item /
@@ -62,6 +62,7 @@ export function buildSystemPrompt(specialists) {
     '',
     'Your own tools are:',
     '- schedule_message: set a one-off reminder or a recurring check-in, processed as a fresh turn when it fires.',
+    '- cancel_schedule: cancel one of your existing scheduled items so it stops firing.',
     '- save_memory: remember a durable fact, preference, or piece of context to recall in future turns.',
   ];
   if (hasSpecialists) {
@@ -72,6 +73,8 @@ export function buildSystemPrompt(specialists) {
   lines.push(
     '',
     'Beyond those tools you converse: answer questions, summarise, and help think things through using what the user tells you and what you already know.',
+    '',
+    'When you have scheduled items, the latest list is injected each turn as an <active_schedules> block, each line carrying the item id. Use those ids to answer "what reminders do I have?" and to cancel: pass the matching id to cancel_schedule. Never invent an id — only cancel one that appears in that block.',
     '',
   );
   if (hasSpecialists) {
@@ -90,7 +93,7 @@ export function buildSystemPrompt(specialists) {
   lines.push(
     `${uncovered} When a request needs a capability like that, do not offer to do it yourself and do not ask the user to paste in the content for you. Instead, explain that this kind of work is handled by a specialist sub-agent that has not been set up yet, and that one can be added for that task so you can delegate to it.`,
     '',
-    `When asked what you can do, describe your abilities honestly — conversation, reminders, durable memory${hasSpecialists ? ', and the specialists you can delegate to' : ''} — and do not claim capabilities you do not have.`,
+    `When asked what you can do, describe your abilities honestly — conversation, reminders you can set and cancel, durable memory${hasSpecialists ? ', and the specialists you can delegate to' : ''} — and do not claim capabilities you do not have.`,
     '',
     'Replies are delivered to Slack. Keep them concise; standard Markdown (bold, bullets, links, headings, code) is fine and is converted to Slack formatting for you. Do not use horizontal rules (lines of ---).',
   );
@@ -101,8 +104,9 @@ export function buildSystemPrompt(specialists) {
 // present it is prepended as a context preamble ahead of the user's message,
 // mirroring the v1 pre-reply RAG layout (stored context first, then the turn).
 //
-// Returns `{ text, scheduled, memories, delegations }`: the assistant's final
-// text, a list of `{ text, after_seconds, every_seconds? }` schedule requests, a
+// Returns `{ text, scheduled, cancellations, memories, delegations }`: the
+// assistant's final text, a list of `{ text, after_seconds, every_seconds? }`
+// schedule requests, a list of `{ scheduled_item_id }` cancellation requests, a
 // list of `{ content, title? }` memory-save requests, and a list of
 // `{ specialist, goal, facts?, constraints? }` delegation requests, all collected
 // from tool calls during the turn.
@@ -113,6 +117,7 @@ export async function runClaudeTurn(userText, memory) {
   const hasSpecialists = specialists.length > 0;
 
   const scheduled = [];
+  const cancellations = [];
   const memories = [];
   const delegations = [];
 
@@ -141,6 +146,21 @@ export async function runClaudeTurn(userText, memory) {
             ? `every ${args.every_seconds}s, starting in ${args.after_seconds}s`
             : `in ${args.after_seconds}s`;
         return { content: [{ type: 'text', text: `Scheduled "${args.text}" ${when}.` }] };
+      },
+    ),
+    tool(
+      'cancel_schedule',
+      'Cancel one of your existing scheduled items so it stops firing. Pass the id from the <active_schedules> block; cancelling an unknown or already-finished item is a harmless no-op.',
+      {
+        scheduled_item_id: z
+          .string()
+          .describe('The id of the scheduled item to cancel, taken from the <active_schedules> block.'),
+      },
+      async (args) => {
+        cancellations.push({ scheduled_item_id: args.scheduled_item_id });
+        return {
+          content: [{ type: 'text', text: `Cancelled scheduled item ${args.scheduled_item_id}.` }],
+        };
       },
     ),
     tool(
@@ -209,7 +229,11 @@ export async function runClaudeTurn(userText, memory) {
 
   const scheduler = createSdkMcpServer({ name: 'assistant', version: '0.1.0', tools });
 
-  const allowedTools = ['mcp__assistant__schedule_message', 'mcp__assistant__save_memory'];
+  const allowedTools = [
+    'mcp__assistant__schedule_message',
+    'mcp__assistant__cancel_schedule',
+    'mcp__assistant__save_memory',
+  ];
   if (hasSpecialists) allowedTools.push('mcp__assistant__delegate');
 
   const q = query({
@@ -245,5 +269,5 @@ export async function runClaudeTurn(userText, memory) {
       if (segment.trim().length > 0) segments.push(segment.trim());
     }
   }
-  return { text: segments.join('\n\n'), scheduled, memories, delegations };
+  return { text: segments.join('\n\n'), scheduled, cancellations, memories, delegations };
 }
