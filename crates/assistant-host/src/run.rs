@@ -342,7 +342,7 @@ where
     /// The combined context preamble to inject into this turn's inbound metadata,
     /// or `None` when memory injection is disabled, the caller already set
     /// metadata, or nothing composed. Concatenates (blank-line separated) the
-    /// memory block and the agent's `<active_schedules>` block — both optional —
+    /// memory block and the agent's `<schedules>` block — both optional —
     /// from a single central-DB connection. The shim prepends the whole thing as
     /// context ahead of the user's message. Fail-open: a DB error skips injection.
     fn context_block(&self, inbound: &InboundMessage) -> Option<String> {
@@ -362,15 +362,16 @@ where
         if let Some(block) = self.memory_block(cfg, &conn, &inbound.content) {
             blocks.push(block);
         }
-        // The agent's active schedules, so it can answer "what's scheduled?" and
-        // knows each item's id to pass to cancel_schedule. Agent-group scoped (the
-        // instance is the isolation boundary), capped at the same limit as memory.
+        // The agent's live schedules (active + paused), so it can answer "what's
+        // scheduled?" and knows each item's id to pass to cancel/pause/resume.
+        // Agent-group scoped (the instance is the isolation boundary), capped at
+        // the same limit as memory.
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         if let Some(block) =
-            crate::scheduler::render_active_schedules_block(&conn, cfg.agent_group_id, now, cfg.limit)
+            crate::scheduler::render_schedules_block(&conn, cfg.agent_group_id, now, cfg.limit)
         {
             blocks.push(block);
         }

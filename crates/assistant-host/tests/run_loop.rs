@@ -229,7 +229,7 @@ fn catalog_memory_is_injected_into_inbound_metadata() {
 }
 
 #[test]
-fn active_schedules_block_is_injected_into_inbound_metadata() {
+fn schedules_block_is_injected_into_inbound_metadata() {
     use assistant_db::{apply, baseline_migrations, baseline_owner_modules, open_central, MigrationSet};
     use assistant_scheduler::{upsert_item, ContextPolicy, ScheduleIntent, ScheduledMessageMeta};
 
@@ -282,15 +282,15 @@ fn active_schedules_block_is_injected_into_inbound_metadata() {
     stop.store(true, Ordering::Relaxed);
     shim.join().unwrap();
 
-    // The host injected an `<active_schedules>` block carrying the item's id and
-    // summary into the inbound metadata (seq 0). The shim consuming it is the
-    // live-only tail; here we assert the host wired it through.
+    // The host injected a `<schedules>` block carrying the item's id and summary
+    // into the inbound metadata (seq 0). The shim consuming it is the live-only
+    // tail; here we assert the host wired it through.
     let conn = rusqlite::Connection::open(layout.inbound_db_path()).unwrap();
     let metadata: Option<String> = conn
         .query_row("SELECT metadata FROM messages_in WHERE seq = 0", [], |row| row.get(0))
         .unwrap();
-    let metadata = metadata.expect("active_schedules block should be injected");
-    assert!(metadata.contains("<active_schedules>"), "got {metadata:?}");
+    let metadata = metadata.expect("schedules block should be injected");
+    assert!(metadata.contains("<schedules>"), "got {metadata:?}");
     assert!(metadata.contains("Stretch break"), "got {metadata:?}");
     assert!(metadata.contains("id=sched_"), "got {metadata:?}");
 }

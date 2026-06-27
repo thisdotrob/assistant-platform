@@ -36,8 +36,8 @@ use assistant_router::{
 use assistant_runtime_docker::ContainerRuntime;
 use assistant_scheduler::{
     advance_recurrence, cancel_item, claim_due, complete_item, complete_occurrence, list_items,
-    upsert_item, ContextPolicy, EpochSecs, Occurrence, ProjectedItem, ProjectionError, Recurrence,
-    ScheduleIntent, ScheduleStatus, ScheduledMessageMeta,
+    pause_item, resume_item, upsert_item, ContextPolicy, EpochSecs, Occurrence, ProjectedItem,
+    ProjectionError, Recurrence, ScheduleIntent, ScheduleStatus, ScheduledMessageMeta,
 };
 use assistant_session::{InboundMessage, OutboundMessage, SessionLayout};
 use rusqlite::Connection;
@@ -818,11 +818,11 @@ struct SchedulePayload {
 }
 
 /// Deliver one reply to Slack, or — when it is a side-effect action
-/// (`schedule_message`, `cancel_schedule`, `save_memory`) — perform that side
-/// effect instead of posting it. These actions are never user-visible text, so the raw payload
-/// must not be delivered; the run's own confirmation text (a separate reply) is
-/// what the user sees. Failures are logged, not retried, matching the rest of
-/// the loop.
+/// (`schedule_message`, `cancel_schedule`, `pause_schedule`, `resume_schedule`,
+/// `save_memory`) — perform that side effect instead of posting it. These actions
+/// are never user-visible text, so the raw payload must not be delivered; the
+/// run's own confirmation text (a separate reply) is what the user sees. Failures
+/// are logged, not retried, matching the rest of the loop.
 fn deliver_reply<A>(
     conn: &Connection,
     channel: &SlackChannel<A>,
@@ -843,6 +843,18 @@ fn deliver_reply<A>(
     if reply.kind == "cancel_schedule" {
         if let Err(err) = cancel_schedule(conn, &reply.content) {
             eprintln!("slack: cancelling a schedule from a turn in channel {session_id} failed: {err}");
+        }
+        return;
+    }
+    if reply.kind == "pause_schedule" {
+        if let Err(err) = pause_schedule(conn, &reply.content) {
+            eprintln!("slack: pausing a schedule from a turn in channel {session_id} failed: {err}");
+        }
+        return;
+    }
+    if reply.kind == "resume_schedule" {
+        if let Err(err) = resume_schedule(conn, &reply.content) {
+            eprintln!("slack: resuming a schedule from a turn in channel {session_id} failed: {err}");
         }
         return;
     }
@@ -918,13 +930,19 @@ fn create_schedule(conn: &Connection, session_id: &str, payload: &str) -> Result
     Ok(())
 }
 
-/// The wire payload an agent's `cancel_schedule` action carries in its outbound
-/// `content` (the serde body of
-/// [`assistant_agent_protocol::OutboundAction::CancelSchedule`]). The id is one
-/// the agent read from the host-injected `<active_schedules>` block.
+/// The wire payload a schedule-lifecycle action (`cancel_schedule`,
+/// `pause_schedule`, `resume_schedule`) carries in its outbound `content` (the
+/// serde body of the matching [`assistant_agent_protocol::OutboundAction`]). The
+/// id is one the agent read from the host-injected `<schedules>` block.
 #[derive(serde::Deserialize)]
-struct CancelSchedulePayload {
+struct ScheduleItemRef {
     scheduled_item_id: String,
+}
+
+impl ScheduleItemRef {
+    fn parse(kind: &str, payload: &str) -> Result<Self, String> {
+        serde_json::from_str(payload).map_err(|e| format!("bad {kind} payload: {e}"))
+    }
 }
 
 /// Cancel a scheduled item an agent's `cancel_schedule` action named. A terminal
@@ -932,9 +950,28 @@ struct CancelSchedulePayload {
 /// projection; an unknown or already-terminal id is a silent no-op (see
 /// [`assistant_scheduler::cancel_item`]).
 fn cancel_schedule(conn: &Connection, payload: &str) -> Result<(), String> {
-    let payload: CancelSchedulePayload =
-        serde_json::from_str(payload).map_err(|e| format!("bad cancel_schedule payload: {e}"))?;
+    let payload = ScheduleItemRef::parse("cancel_schedule", payload)?;
     cancel_item(conn, &payload.scheduled_item_id).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Pause a scheduled item an agent's `pause_schedule` action named, suspending it
+/// from the swept set until resumed. Central-only like [`cancel_schedule`]; only
+/// an `active` item pauses, so an unknown or non-active id is a silent no-op (see
+/// [`assistant_scheduler::pause_item`]).
+fn pause_schedule(conn: &Connection, payload: &str) -> Result<(), String> {
+    let payload = ScheduleItemRef::parse("pause_schedule", payload)?;
+    pause_item(conn, &payload.scheduled_item_id).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Resume a paused scheduled item an agent's `resume_schedule` action named,
+/// returning it to the swept set. Central-only like [`cancel_schedule`]; only a
+/// `paused` item resumes, so an unknown or non-paused id is a silent no-op (see
+/// [`assistant_scheduler::resume_item`]).
+fn resume_schedule(conn: &Connection, payload: &str) -> Result<(), String> {
+    let payload = ScheduleItemRef::parse("resume_schedule", payload)?;
+    resume_item(conn, &payload.scheduled_item_id).map_err(|e| e.to_string())?;
     Ok(())
 }
 

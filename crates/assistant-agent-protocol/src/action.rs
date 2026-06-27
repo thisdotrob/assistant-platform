@@ -60,11 +60,24 @@ pub enum OutboundAction {
         title: Option<String>,
     },
     /// Cancel a previously scheduled item by its `scheduled_item_id` (which the
-    /// agent reads from the host-injected `<active_schedules>` context block).
-    /// Not a user-visible send: the host marks the item cancelled as a side
+    /// agent reads from the host-injected `<schedules>` context block). Not a
+    /// user-visible send: the host marks the item cancelled as a side effect, so
+    /// the run's final text still delivers the user-facing confirmation.
+    CancelSchedule {
+        scheduled_item_id: String,
+    },
+    /// Pause a previously scheduled item by its `scheduled_item_id` so it stops
+    /// firing without being deleted; it can be resumed later. Not a user-visible
+    /// send: the host marks the item paused as a side effect, so the run's final
+    /// text still delivers the user-facing confirmation.
+    PauseSchedule {
+        scheduled_item_id: String,
+    },
+    /// Resume a previously paused item by its `scheduled_item_id` so it fires
+    /// again. Not a user-visible send: the host marks the item active as a side
     /// effect, so the run's final text still delivers the user-facing
     /// confirmation.
-    CancelSchedule {
+    ResumeSchedule {
         scheduled_item_id: String,
     },
 }
@@ -99,6 +112,8 @@ impl OutboundAction {
             OutboundAction::ScheduleMessage { .. } => "schedule_message",
             OutboundAction::SaveMemory { .. } => "save_memory",
             OutboundAction::CancelSchedule { .. } => "cancel_schedule",
+            OutboundAction::PauseSchedule { .. } => "pause_schedule",
+            OutboundAction::ResumeSchedule { .. } => "resume_schedule",
         }
     }
 }
@@ -175,6 +190,12 @@ mod tests {
             OutboundAction::CancelSchedule {
                 scheduled_item_id: "sched_abc123".into(),
             },
+            OutboundAction::PauseSchedule {
+                scheduled_item_id: "sched_abc123".into(),
+            },
+            OutboundAction::ResumeSchedule {
+                scheduled_item_id: "sched_abc123".into(),
+            },
         ];
         for action in actions {
             let json = serde_json::to_string(&action).unwrap();
@@ -215,6 +236,15 @@ mod tests {
         .is_user_visible_send());
         // Cancelling a schedule is a side effect, not the run's visible reply.
         assert!(!OutboundAction::CancelSchedule {
+            scheduled_item_id: "sched_abc123".into(),
+        }
+        .is_user_visible_send());
+        // Pausing/resuming a schedule are side effects, not the run's visible reply.
+        assert!(!OutboundAction::PauseSchedule {
+            scheduled_item_id: "sched_abc123".into(),
+        }
+        .is_user_visible_send());
+        assert!(!OutboundAction::ResumeSchedule {
             scheduled_item_id: "sched_abc123".into(),
         }
         .is_user_visible_send());

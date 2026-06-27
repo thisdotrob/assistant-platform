@@ -236,6 +236,34 @@ pub fn cancel_item(conn: &Connection, scheduled_item_id: &str) -> Result<(), Pro
     Ok(())
 }
 
+/// Pause a schedule by id — suspends firing without ending it, dropping the item
+/// from [`claim_due`]'s `WHERE status='active'` swept set until it is resumed.
+/// Scoped to an `active` row so a `paused`/`cancelled`/`completed` item is a
+/// no-op (idempotent), matching the `Active -> Paused` lifecycle rule. A no-op if
+/// the item is absent. `process_after` is left untouched, so a later [`resume_item`]
+/// picks up where it left off (an item already past due fires on the next sweep).
+pub fn pause_item(conn: &Connection, scheduled_item_id: &str) -> Result<(), ProjectionError> {
+    conn.execute(
+        "UPDATE scheduled_items SET status = 'paused' WHERE id = ?1 AND status = 'active'",
+        rusqlite::params![scheduled_item_id],
+    )?;
+    Ok(())
+}
+
+/// Resume a paused schedule by id — returns it to the `active` swept set so it
+/// fires again. Scoped to a `paused` row so an `active`/`cancelled`/`completed`
+/// item is a no-op (idempotent), matching the `Paused -> Active` lifecycle rule.
+/// A no-op if the item is absent. `process_after` is unchanged: if it is already
+/// in the past the item is immediately due and fires on the next sweep (matching
+/// the catch-up-after-downtime semantics), then continues on its cadence.
+pub fn resume_item(conn: &Connection, scheduled_item_id: &str) -> Result<(), ProjectionError> {
+    conn.execute(
+        "UPDATE scheduled_items SET status = 'active' WHERE id = ?1 AND status = 'paused'",
+        rusqlite::params![scheduled_item_id],
+    )?;
+    Ok(())
+}
+
 const ITEM_COLUMNS: &str =
     "id, agent_group_id, session_id, intent, process_after, recurrence, status, revision";
 
@@ -579,6 +607,60 @@ mod tests {
 
         // An unknown id is a no-op.
         cancel_item(&conn, "sched_missing").unwrap();
+        assert_eq!(item_status(&conn, "sched_missing").unwrap(), None);
+    }
+
+    #[test]
+    fn pause_and_resume_toggle_status_and_are_scoped() {
+        let conn = db();
+
+        // An active item pauses and drops out of the swept active listing.
+        let m = meta(11, "standup", 1_000, true);
+        upsert_item(&conn, &m, Some("sess-1")).unwrap();
+        pause_item(&conn, &m.scheduled_item_id).unwrap();
+        assert_eq!(
+            item_status(&conn, &m.scheduled_item_id).unwrap(),
+            Some(ScheduleStatus::Paused)
+        );
+        assert!(list_items(&conn, 11, Some(ScheduleStatus::Active))
+            .unwrap()
+            .is_empty());
+
+        // Pause is idempotent on an already-paused row.
+        pause_item(&conn, &m.scheduled_item_id).unwrap();
+        assert_eq!(
+            item_status(&conn, &m.scheduled_item_id).unwrap(),
+            Some(ScheduleStatus::Paused)
+        );
+
+        // Resume returns it to active, untouched otherwise.
+        resume_item(&conn, &m.scheduled_item_id).unwrap();
+        let rows = list_items(&conn, 11, Some(ScheduleStatus::Active)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].process_after, Some(1_000));
+        assert_eq!(rows[0].recurrence, Some(Recurrence::Every { seconds: 3_600 }));
+
+        // Resume is idempotent on an already-active row.
+        resume_item(&conn, &m.scheduled_item_id).unwrap();
+        assert_eq!(
+            item_status(&conn, &m.scheduled_item_id).unwrap(),
+            Some(ScheduleStatus::Active)
+        );
+
+        // A cancelled (terminal) item is never paused or resumed back to life.
+        let done = meta(11, "done", 2_000, false);
+        upsert_item(&conn, &done, None).unwrap();
+        cancel_item(&conn, &done.scheduled_item_id).unwrap();
+        pause_item(&conn, &done.scheduled_item_id).unwrap();
+        resume_item(&conn, &done.scheduled_item_id).unwrap();
+        assert_eq!(
+            item_status(&conn, &done.scheduled_item_id).unwrap(),
+            Some(ScheduleStatus::Cancelled)
+        );
+
+        // An unknown id is a no-op for both.
+        pause_item(&conn, "sched_missing").unwrap();
+        resume_item(&conn, "sched_missing").unwrap();
         assert_eq!(item_status(&conn, "sched_missing").unwrap(), None);
     }
 

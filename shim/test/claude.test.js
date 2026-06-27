@@ -39,11 +39,13 @@ test('specialistsFromEnv drops entries missing a string name or description', ()
   assert.deepEqual(out, [{ name: 'browser', description: 'ok' }]);
 });
 
-test('buildSystemPrompt advertises cancel_schedule and how to read ids from <active_schedules>', () => {
+test('buildSystemPrompt advertises the schedule-management tools and how to read ids from <schedules>', () => {
   const prompt = buildSystemPrompt([]);
   assert.match(prompt, /- cancel_schedule:/);
-  assert.match(prompt, /<active_schedules>/);
-  // Guards against fabricating an id to cancel.
+  assert.match(prompt, /- pause_schedule:/);
+  assert.match(prompt, /- resume_schedule:/);
+  assert.match(prompt, /<schedules>/);
+  // Guards against fabricating an id to act on.
   assert.match(prompt, /Never invent an id/);
 });
 

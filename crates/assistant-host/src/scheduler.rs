@@ -131,36 +131,47 @@ where
     Ok(SweepReport { expired_sticky, fired })
 }
 
-/// Render an agent group's active scheduled items as an `<active_schedules>`
-/// context block for injection into a turn's inbound metadata, or `None` when it
-/// has none (so an empty block is never injected). Each line carries the item's
-/// id — which the agent passes to `cancel_schedule` to cancel it — its intent
-/// summary, the next due time relative to `now`, and its recurrence. Scoped to a
-/// single `agent_group_id` (the instance is the isolation boundary) and capped at
-/// `limit` items, taking the soonest-due first (the projection lists in due
-/// order). Read-only and fail-soft at the call site: a query error yields `None`.
-pub fn render_active_schedules_block(
+/// Render an agent group's live scheduled items (active and paused) as a
+/// `<schedules>` context block for injection into a turn's inbound metadata, or
+/// `None` when it has none (so an empty block is never injected). Each line
+/// carries the item's id — which the agent passes to `cancel_schedule` /
+/// `pause_schedule` / `resume_schedule` — its intent summary, the next due time
+/// relative to `now`, its recurrence, and a `paused` marker when suspended. Paused
+/// items are included so the agent has their ids to resume; cancelled/completed
+/// items are omitted (they are terminal). Scoped to a single `agent_group_id` (the
+/// instance is the isolation boundary) and capped at `limit` items, taking the
+/// soonest-due first (the projection lists in due order). Read-only and fail-soft
+/// at the call site: a query error yields `None`.
+pub fn render_schedules_block(
     conn: &Connection,
     agent_group_id: i64,
     now: i64,
     limit: usize,
 ) -> Option<String> {
-    let items = list_items(conn, agent_group_id, Some(ScheduleStatus::Active)).ok()?;
+    let items: Vec<ProjectedItem> = list_items(conn, agent_group_id, None)
+        .ok()?
+        .into_iter()
+        .filter(|i| matches!(i.status, ScheduleStatus::Active | ScheduleStatus::Paused))
+        .collect();
     if items.is_empty() {
         return None;
     }
     let mut block = String::from(
-        "<active_schedules>\nYour active scheduled items. To cancel one, call cancel_schedule with its id.\n",
+        "<schedules>\nYour scheduled items (active, and any you have paused). \
+         To cancel one, call cancel_schedule with its id; to pause an active one, \
+         call pause_schedule; to resume a paused one, call resume_schedule.\n",
     );
     for item in items.iter().take(limit) {
         block.push_str(&render_schedule_line(item, now));
         block.push('\n');
     }
-    block.push_str("</active_schedules>");
+    block.push_str("</schedules>");
     Some(block)
 }
 
-/// One `- id=… | "summary" | next: … | …` line for a projected item.
+/// One `- id=… | "summary" | next: … | …` line for a projected item. A paused
+/// item carries a trailing `| paused` marker (its `next:` is when it would fire
+/// once resumed).
 fn render_schedule_line(item: &ProjectedItem, now: i64) -> String {
     let summary = item.intent.replace('\n', " ");
     let due = match item.process_after {
@@ -172,7 +183,8 @@ fn render_schedule_line(item: &ProjectedItem, now: i64) -> String {
         None => "one-off".to_string(),
         Some(Recurrence::Every { seconds }) => format!("repeats every {}", human_duration(*seconds)),
     };
-    format!("- id={} | \"{summary}\" | next: {due} | {recurrence}", item.id)
+    let paused = if item.status == ScheduleStatus::Paused { " | paused" } else { "" };
+    format!("- id={} | \"{summary}\" | next: {due} | {recurrence}{paused}", item.id)
 }
 
 /// A compact human duration for a non-negative second count (largest whole unit:
@@ -195,7 +207,9 @@ fn human_duration(secs: i64) -> String {
 mod tests {
     use super::*;
     use assistant_db::{apply, baseline_migrations, baseline_owner_modules};
-    use assistant_scheduler::{upsert_item, ContextPolicy, Recurrence, ScheduleIntent, ScheduledMessageMeta};
+    use assistant_scheduler::{
+        pause_item, upsert_item, ContextPolicy, Recurrence, ScheduleIntent, ScheduledMessageMeta,
+    };
 
     fn central() -> Connection {
         let mut conn = Connection::open_in_memory().unwrap();
@@ -222,9 +236,9 @@ mod tests {
     }
 
     #[test]
-    fn no_active_items_renders_no_block() {
+    fn no_live_items_renders_no_block() {
         let conn = central();
-        assert!(render_active_schedules_block(&conn, 1, 1_000, 5).is_none());
+        assert!(render_schedules_block(&conn, 1, 1_000, 5).is_none());
     }
 
     #[test]
@@ -235,8 +249,8 @@ mod tests {
         // An item for another agent group must not leak into this block.
         seed(&conn, 2, "other agent", 1_100, None);
 
-        let block = render_active_schedules_block(&conn, 1, 1_000, 5).unwrap();
-        assert!(block.contains("<active_schedules>") && block.contains("</active_schedules>"));
+        let block = render_schedules_block(&conn, 1, 1_000, 5).unwrap();
+        assert!(block.contains("<schedules>") && block.contains("</schedules>"));
         assert!(block.contains(&format!("id={one_off}")));
         assert!(block.contains("\"Stretch\" | next: in 5m | one-off"));
         assert!(block.contains(&format!("id={recurring}")));
@@ -245,11 +259,43 @@ mod tests {
     }
 
     #[test]
+    fn paused_items_are_included_with_a_marker() {
+        let conn = central();
+        let active = seed(&conn, 1, "Active one", 1_300, None);
+        let paused = seed(&conn, 1, "Paused one", 1_500, None);
+        pause_item(&conn, &paused).unwrap();
+
+        let block = render_schedules_block(&conn, 1, 1_000, 5).unwrap();
+        // Both the active and the paused item appear; only the paused one is marked.
+        assert!(block.contains(&format!("id={active}")));
+        assert!(block.contains(&format!("id={paused}")));
+        assert!(block.contains("\"Paused one\" | next: in 8m | one-off | paused"));
+        assert!(
+            block.contains("\"Active one\" | next: in 5m | one-off\n"),
+            "an active line must not carry the paused marker"
+        );
+        // The header advertises pause/resume alongside cancel.
+        assert!(block.contains("pause_schedule") && block.contains("resume_schedule"));
+    }
+
+    #[test]
+    fn terminal_items_are_excluded() {
+        let conn = central();
+        let active = seed(&conn, 1, "live", 1_300, None);
+        let gone = seed(&conn, 1, "cancelled", 1_400, None);
+        assistant_scheduler::cancel_item(&conn, &gone).unwrap();
+
+        let block = render_schedules_block(&conn, 1, 1_000, 5).unwrap();
+        assert!(block.contains(&format!("id={active}")));
+        assert!(!block.contains("\"cancelled\""), "a cancelled item must not appear");
+    }
+
+    #[test]
     fn cap_limits_lines_to_the_soonest_due() {
         let conn = central();
         let soon = seed(&conn, 1, "soon", 1_010, None);
         seed(&conn, 1, "later", 9_000, None);
-        let block = render_active_schedules_block(&conn, 1, 1_000, 1).unwrap();
+        let block = render_schedules_block(&conn, 1, 1_000, 1).unwrap();
         assert!(block.contains(&format!("id={soon}")));
         assert!(!block.contains("\"later\""), "cap must drop the later item");
     }

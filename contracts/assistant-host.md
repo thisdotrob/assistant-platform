@@ -74,18 +74,24 @@ emit the action, and the terminal-path tick remain deferred.
 emission lands) seeds one scheduled item into the instance's central projection
 for the live daemon to fire — one-off by default, or recurring when
 `--every-seconds` is given.
-A turn may also cancel scheduled work: when a run emits a `cancel_schedule` action
-(carrying a `scheduled_item_id`), the serve loop intercepts it like the other
-side-effect actions, applies the cancel lifecycle transition to that item in the
-central index (central-only, matching `schedule_message`), and suppresses delivery.
-The id is one the agent read from the host-injected `<active_schedules>` context
-block (below); cancelling an unknown or already-terminal item is a harmless no-op.
-To make the ids and current items visible to the agent, the host renders each
-turn's inbound metadata with an `<active_schedules>` block listing the agent
-group's active items (id, intent summary, next-due relative to now, recurrence),
-capped and soonest-due first — the read side that pairs with `cancel_schedule`'s
-write side, built like the `<retrieved_memories>` block and fail-soft (a query
-error simply omits it).
+A turn may also manage existing scheduled work: when a run emits a
+`cancel_schedule`, `pause_schedule`, or `resume_schedule` action (each carrying a
+`scheduled_item_id`), the serve loop intercepts it like the other side-effect
+actions, applies the matching lifecycle transition to that item in the central
+index (central-only, matching `schedule_message`), and suppresses delivery. Cancel
+is terminal (`{Active,Paused} -> Cancelled`); pause suspends an active item
+(`Active -> Paused`), dropping it from the due-sweep set without ending it; resume
+returns a paused item to the sweep set (`Paused -> Active`) with its next-due time
+untouched (an item already past due fires on the next sweep). The id is one the
+agent read from the host-injected `<schedules>` context block (below); acting on an
+unknown or already-out-of-state item is a harmless no-op. To make the ids and
+current items visible to the agent, the host renders each turn's inbound metadata
+with a `<schedules>` block listing the agent group's live items — both active and
+paused (a paused line carries a `paused` marker so the agent has its id to resume;
+cancelled/completed items are omitted) — each with id, intent summary, next-due
+relative to now, and recurrence, capped and soonest-due first. It is the read side
+that pairs with the cancel/pause/resume write side, built like the
+`<retrieved_memories>` block and fail-soft (a query error simply omits it).
 
 A turn may also persist memory: when a run emits a `save_memory` action, the serve
 loop intercepts it (in both the inbound and scheduled-turn delivery paths) and
@@ -476,7 +482,9 @@ payload) and posts nothing to Slack, proving the action is intercepted rather th
 delivered. Symmetrically, against a seeded active item, a turn whose shim emits a
 `cancel_schedule` action naming that item's id marks it `cancelled` (gone from the
 active set) and posts nothing, proving the cancel side effect is intercepted rather
-than delivered. Likewise, over a central DB carrying the memory catalog v2 migrations
+than delivered. The same harness covers `pause_schedule` (a seeded active item is
+moved to `paused`, leaving the active set without ending) and `resume_schedule` (a
+seeded paused item rejoins the active set), each posting nothing. Likewise, over a central DB carrying the memory catalog v2 migrations
 and with memory configured, a turn whose shim emits a `save_memory` action posts
 nothing to Slack but projects exactly one catalog row and writes its markdown note
 under the orchestrator memory root; a later sticky-engaged turn in the same channel

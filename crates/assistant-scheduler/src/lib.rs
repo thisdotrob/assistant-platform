@@ -21,7 +21,8 @@ pub use model::{
 };
 pub use projection::{
     advance_recurrence, cancel_item, complete_item, item_status, list_items, migrations,
-    upsert_item, upsert_occurrence, OccurrenceStatus, ProjectedItem, ProjectionError,
+    pause_item, resume_item, upsert_item, upsert_occurrence, OccurrenceStatus, ProjectedItem,
+    ProjectionError,
 };
 pub use readiness::{
     no_work_stuck_past_lease, projections_consistent, sweep_loop_running, CheckStatus,

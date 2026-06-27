@@ -25,8 +25,8 @@ use assistant_specialist_spec::SpecialistSpec;
 use assistant_permissions::{add_user_dm, create_user};
 use assistant_router::{count_drops_by_reason, DropReason};
 use assistant_scheduler::{
-    item_status, list_items, next_claimable_occurrence, upsert_item, ContextPolicy, Recurrence,
-    ScheduleIntent, ScheduleStatus, ScheduledMessageMeta,
+    item_status, list_items, next_claimable_occurrence, pause_item, upsert_item, ContextPolicy,
+    Recurrence, ScheduleIntent, ScheduleStatus, ScheduledMessageMeta,
 };
 use assistant_runtime_docker::{FakeRuntime, ImageRef, OneCliReadiness, RunnerAuthMode};
 use assistant_session::{
@@ -225,6 +225,38 @@ fn spawn_cancel_shim(
                     }
                     fake.claim(seq, "fake-shim").ok();
                     if fake.emit("cancel_schedule", &payload).is_ok() {
+                        handled.insert(seq);
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    })
+}
+
+/// A fake shim that emits one outbound action of an arbitrary `kind` (carrying
+/// `payload`) per new inbound. Used for the pause/resume interception tests,
+/// which share the cancel shim's shape but a different action kind.
+fn spawn_action_shim(
+    layout: SessionLayout,
+    stop: Arc<AtomicBool>,
+    kind: &'static str,
+    payload: String,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        let control = LocalControl::new(layout);
+        let fake = control.fake_container();
+        fake.start("run-1").ok();
+        let mut handled: HashSet<i64> = HashSet::new();
+        while !stop.load(Ordering::Relaxed) {
+            fake.heartbeat().ok();
+            if let Ok(inbound) = fake.read_inbound() {
+                for (seq, _content) in inbound {
+                    if handled.contains(&seq) {
+                        continue;
+                    }
+                    fake.claim(seq, "fake-shim").ok();
+                    if fake.emit(kind, &payload).is_ok() {
                         handled.insert(seq);
                     }
                 }
@@ -1267,6 +1299,162 @@ fn a_turns_cancel_schedule_action_marks_the_item_cancelled_and_is_not_posted() {
     assert!(
         list_items(&conn, 1, Some(ScheduleStatus::Active)).unwrap().is_empty(),
         "a cancelled item must not remain in the active set"
+    );
+    drop(conn);
+
+    verify_sequence_parity(&layout).unwrap();
+
+    shim_stop.store(true, Ordering::Relaxed);
+    shim.join().unwrap();
+}
+
+#[test]
+fn a_turns_pause_schedule_action_marks_the_item_paused_and_is_not_posted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sessions = tmp.path().join("sessions");
+    let central = tmp.path().join("central.db");
+    migrate_central(&central);
+    register_dm(&central, "rob", "U1");
+
+    let layout = SessionLayout::derive(&sessions, "slack", "C1").unwrap();
+    init_session(&layout).unwrap();
+
+    // Seed an active recurring item the turn will pause by id.
+    let meta = ScheduledMessageMeta::create(
+        1,
+        ScheduleIntent {
+            created_by: "agent".to_string(),
+            summary: "daily standup".to_string(),
+            created_at: now_secs(),
+        },
+        now_secs() + 120,
+        Some(Recurrence::Every { seconds: 3600 }),
+        ContextPolicy::default(),
+    )
+    .unwrap();
+    let item_id = meta.scheduled_item_id.clone();
+    {
+        let conn = open_central(&central).unwrap();
+        upsert_item(&conn, &meta, Some("C1")).unwrap();
+    }
+
+    let shim_stop = Arc::new(AtomicBool::new(false));
+    let payload = format!(r#"{{"scheduled_item_id":"{item_id}"}}"#);
+    let shim = spawn_action_shim(layout.clone(), shim_stop.clone(), "pause_schedule", payload);
+
+    let exhausted = Rc::new(Cell::new(false));
+    let posts: Posts = Rc::new(RefCell::new(Vec::new()));
+    let mut channel = SlackChannel::new(FakeApi {
+        posts: posts.clone(),
+        on_post: Rc::new(|| {}),
+    });
+    let mut opener = ScriptedOpener {
+        frames: vec![events_api(
+            "env-1",
+            r#"{"type":"app_mention","channel":"C1","user":"U1","ts":"100.1","text":"pause my standup"}"#,
+        )],
+        handed_out: false,
+        exhausted: exhausted.clone(),
+    };
+    let opts = test_opts(sessions, central.clone());
+
+    let stop = {
+        let exhausted = exhausted.clone();
+        move || exhausted.get()
+    };
+    serve_slack(&mut opener, &mut channel, opts, FakeRuntime::new, &stop).unwrap();
+
+    assert!(
+        posts.borrow().is_empty(),
+        "a pause_schedule action must not be posted to Slack: {:?}",
+        posts.borrow()
+    );
+
+    // The item is now paused — out of the active set but not terminal.
+    let conn = open_central(&central).unwrap();
+    assert_eq!(item_status(&conn, &item_id).unwrap(), Some(ScheduleStatus::Paused));
+    assert!(
+        list_items(&conn, 1, Some(ScheduleStatus::Active)).unwrap().is_empty(),
+        "a paused item must not remain in the active set"
+    );
+    drop(conn);
+
+    verify_sequence_parity(&layout).unwrap();
+
+    shim_stop.store(true, Ordering::Relaxed);
+    shim.join().unwrap();
+}
+
+#[test]
+fn a_turns_resume_schedule_action_marks_the_item_active_and_is_not_posted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sessions = tmp.path().join("sessions");
+    let central = tmp.path().join("central.db");
+    migrate_central(&central);
+    register_dm(&central, "rob", "U1");
+
+    let layout = SessionLayout::derive(&sessions, "slack", "C1").unwrap();
+    init_session(&layout).unwrap();
+
+    // Seed an item, then pause it, so the turn can resume it by id.
+    let meta = ScheduledMessageMeta::create(
+        1,
+        ScheduleIntent {
+            created_by: "agent".to_string(),
+            summary: "daily standup".to_string(),
+            created_at: now_secs(),
+        },
+        now_secs() + 120,
+        Some(Recurrence::Every { seconds: 3600 }),
+        ContextPolicy::default(),
+    )
+    .unwrap();
+    let item_id = meta.scheduled_item_id.clone();
+    {
+        let conn = open_central(&central).unwrap();
+        upsert_item(&conn, &meta, Some("C1")).unwrap();
+        pause_item(&conn, &item_id).unwrap();
+    }
+
+    let shim_stop = Arc::new(AtomicBool::new(false));
+    let payload = format!(r#"{{"scheduled_item_id":"{item_id}"}}"#);
+    let shim = spawn_action_shim(layout.clone(), shim_stop.clone(), "resume_schedule", payload);
+
+    let exhausted = Rc::new(Cell::new(false));
+    let posts: Posts = Rc::new(RefCell::new(Vec::new()));
+    let mut channel = SlackChannel::new(FakeApi {
+        posts: posts.clone(),
+        on_post: Rc::new(|| {}),
+    });
+    let mut opener = ScriptedOpener {
+        frames: vec![events_api(
+            "env-1",
+            r#"{"type":"app_mention","channel":"C1","user":"U1","ts":"100.1","text":"resume my standup"}"#,
+        )],
+        handed_out: false,
+        exhausted: exhausted.clone(),
+    };
+    let opts = test_opts(sessions, central.clone());
+
+    let stop = {
+        let exhausted = exhausted.clone();
+        move || exhausted.get()
+    };
+    serve_slack(&mut opener, &mut channel, opts, FakeRuntime::new, &stop).unwrap();
+
+    assert!(
+        posts.borrow().is_empty(),
+        "a resume_schedule action must not be posted to Slack: {:?}",
+        posts.borrow()
+    );
+
+    // The item is active again — back in the swept set.
+    let conn = open_central(&central).unwrap();
+    assert_eq!(item_status(&conn, &item_id).unwrap(), Some(ScheduleStatus::Active));
+    assert_eq!(
+        list_items(&conn, 1, Some(ScheduleStatus::Active)).unwrap().len(),
+        1,
+        "a resumed item must rejoin the active set"
     );
     drop(conn);
 
