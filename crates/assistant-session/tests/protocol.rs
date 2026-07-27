@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use assistant_session::{
     container_liveness, current_outbound_compat, enqueue_inbound, enqueue_inbound_keyed,
-    lazy_migrate, migrations_v1_only, open_outbound_recovery, read_outbound, schema_version,
-    verify_sequence_parity, DbKind, InboundMessage, Liveness, LocalControl, SchemaCompat,
-    SessionError, SessionLayout, CURRENT_INBOUND_VERSION,
+    lazy_migrate, migrations_v1_only, open_inbound, open_outbound_recovery, read_outbound,
+    schema_version, upsert_inbound_meta, verify_sequence_parity, DbKind, InboundMessage, Liveness,
+    LocalControl, SchemaCompat, SessionError, SessionLayout, CURRENT_INBOUND_VERSION,
 };
 
 const TTL: Duration = Duration::from_secs(30);
@@ -55,6 +55,71 @@ fn host_enqueues_inbound_and_reads_outbound_from_fake_writer() {
 
     // Parity holds across both DBs.
     verify_sequence_parity(control.layout()).unwrap();
+}
+
+#[test]
+fn upsert_inbound_meta_rewrites_one_keyed_row_in_place() {
+    let tmp = tempfile::tempdir().unwrap();
+    let control = LocalControl::new(layout(tmp.path()));
+    control.init().unwrap();
+    let layout = control.layout();
+
+    // First write inserts an even-seq row.
+    let seq = upsert_inbound_meta(
+        layout,
+        "sched-meta:item-1",
+        &InboundMessage {
+            sender: "schedule-meta".to_string(),
+            content: "stretch".to_string(),
+            metadata: Some("{\"status\":\"active\"}".to_string()),
+        },
+    )
+    .unwrap();
+    assert_eq!(seq % 2, 0);
+
+    // A second write under the same key rewrites the same row (same seq), not a
+    // new one — bounded growth for a long-lived schedule.
+    let seq2 = upsert_inbound_meta(
+        layout,
+        "sched-meta:item-1",
+        &InboundMessage {
+            sender: "schedule-meta".to_string(),
+            content: "stretch".to_string(),
+            metadata: Some("{\"status\":\"paused\"}".to_string()),
+        },
+    )
+    .unwrap();
+    assert_eq!(seq2, seq);
+
+    let conn = open_inbound(layout).unwrap();
+    let rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM messages_in", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rows, 1, "the keyed row is rewritten, never duplicated");
+    let metadata: String = conn
+        .query_row(
+            "SELECT metadata FROM messages_in WHERE seq = ?1",
+            [seq],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(metadata, "{\"status\":\"paused\"}");
+
+    // A distinct key inserts a separate row at the next even sequence.
+    let other = upsert_inbound_meta(
+        layout,
+        "sched-meta:item-2",
+        &InboundMessage {
+            sender: "schedule-meta".to_string(),
+            content: "walk".to_string(),
+            metadata: Some("{\"status\":\"active\"}".to_string()),
+        },
+    )
+    .unwrap();
+    assert_ne!(other, seq);
+    assert_eq!(other % 2, 0);
+
+    verify_sequence_parity(layout).unwrap();
 }
 
 #[test]

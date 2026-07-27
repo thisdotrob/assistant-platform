@@ -93,8 +93,19 @@ async function main() {
       console.error(`read_inbound failed: ${err.message}`);
     }
 
-    for (const { seq, content, metadata } of inbound) {
+    for (const { seq, sender, content, metadata } of inbound) {
       if (handled.has(seq)) continue;
+
+      // Scheduling source-of-truth rows are host-written durable state, not
+      // turns: the host stamps an item's current metadata into `messages_in`
+      // (sender 'schedule-meta') so the central projection can be rebuilt from
+      // the session. They must never drive a turn or emit a reply. Marking the
+      // seq handled skips re-parsing it every poll. Mirrors SCHEDULE_META_SENDER
+      // in crates/assistant-scheduler/src/source.rs.
+      if (sender === 'schedule-meta') {
+        handled.add(seq);
+        continue;
+      }
 
       // Refresh liveness before each turn, not just once per outer iteration: a
       // batch of several unacked inbound runs its turns back-to-back, and a long

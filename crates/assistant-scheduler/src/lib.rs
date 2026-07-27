@@ -5,6 +5,7 @@ pub mod model;
 pub mod projection;
 pub mod readiness;
 pub mod repair;
+pub mod source;
 
 pub use event::{SchedulerEvent, SchedulerEventSink, VecEventSink};
 pub use fragment::{
@@ -28,6 +29,9 @@ pub use readiness::{
     no_work_stuck_past_lease, projections_consistent, sweep_loop_running, CheckStatus,
 };
 pub use repair::{reconcile_item, repair_session_projection, RepairError, RepairReport};
+pub use source::{
+    latest_meta, meta_idempotency_key, write_meta, SourceError, SCHEDULE_META_SENDER,
+};
 
 pub const MODULE_ID: &str = "assistant-scheduler";
 pub const MODULE_VERSION: &str = env!("CARGO_PKG_VERSION");

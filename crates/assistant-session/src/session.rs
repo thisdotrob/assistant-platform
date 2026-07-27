@@ -164,6 +164,52 @@ pub fn enqueue_inbound_keyed(
     Ok(seq)
 }
 
+/// Insert or update a single metadata-bearing inbound row, keyed on
+/// `idempotency_key`. The first call for a key allocates an (even) sequence and
+/// inserts; later calls rewrite that same row's `content`/`metadata` in place
+/// (stamping `edited_at`) without consuming a new sequence. This backs the
+/// scheduling source of truth, where an item's current `ScheduledMessageMeta`
+/// lives in exactly one row updated as the schedule changes — so a recurring
+/// item that fires forever never accumulates rows. Returns the row's sequence.
+pub fn upsert_inbound_meta(
+    layout: &SessionLayout,
+    idempotency_key: &str,
+    message: &InboundMessage,
+) -> Result<i64, SessionError> {
+    let mut conn = open_inbound(layout)?;
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT seq FROM messages_in WHERE idempotency_key = ?1",
+            [idempotency_key],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(seq) = existing {
+        conn.execute(
+            "UPDATE messages_in
+                 SET content = ?2, metadata = ?3, edited_at = datetime('now')
+             WHERE seq = ?1",
+            rusqlite::params![seq, message.content, message.metadata],
+        )?;
+        return Ok(seq);
+    }
+    let seq = next_seq(&conn, "messages_in", false)?;
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO messages_in (seq, sender, content, metadata, idempotency_key, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
+        rusqlite::params![
+            seq,
+            message.sender,
+            message.content,
+            message.metadata,
+            idempotency_key
+        ],
+    )?;
+    tx.commit()?;
+    Ok(seq)
+}
+
 /// Read all outbound (container-written, odd-seq) messages in order.
 pub fn read_outbound(
     layout: &SessionLayout,

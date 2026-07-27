@@ -85,15 +85,22 @@ export class Session {
   // Read inbound messages the way the host expects: read-only, ordered by seq.
   // `metadata` carries the host-injected `<retrieved_memories>` block (see
   // crates/assistant-host/src/run.rs `memory_block`); it is a side-channel separate
-  // from `content`, consumed only by the Claude path.
+  // from `content`, consumed only by the Claude path. `sender` lets the loop tell
+  // a turn-driving message from a host-written source-of-truth row (e.g. the
+  // scheduling metadata the host stamps and the loop must skip).
   async readInbound() {
     return withRetry(() => {
       const db = openRo(INBOUND_DB);
       try {
         return db
-          .prepare('SELECT seq, content, metadata FROM messages_in ORDER BY seq')
+          .prepare('SELECT seq, sender, content, metadata FROM messages_in ORDER BY seq')
           .all()
-          .map((r) => ({ seq: Number(r.seq), content: r.content, metadata: r.metadata ?? null }));
+          .map((r) => ({
+            seq: Number(r.seq),
+            sender: r.sender,
+            content: r.content,
+            metadata: r.metadata ?? null,
+          }));
       } finally {
         db.close();
       }

@@ -35,11 +35,12 @@ use assistant_router::{
 };
 use assistant_runtime_docker::ContainerRuntime;
 use assistant_scheduler::{
-    advance_recurrence, cancel_item, claim_due, complete_item, complete_occurrence, list_items,
-    pause_item, resume_item, upsert_item, ContextPolicy, EpochSecs, Occurrence, ProjectedItem,
-    ProjectionError, Recurrence, ScheduleIntent, ScheduleStatus, ScheduledMessageMeta,
+    advance_recurrence, cancel_item, claim_due, complete_item, complete_occurrence, latest_meta,
+    list_items, pause_item, repair_session_projection, resume_item, upsert_item, write_meta,
+    ContextPolicy, EpochSecs, LifecycleTransition, Occurrence, ProjectedItem, ProjectionError,
+    Recurrence, ScheduleIntent, ScheduleStatus, ScheduledMessageMeta,
 };
-use assistant_session::{InboundMessage, OutboundMessage, SessionLayout};
+use assistant_session::{session_exists, InboundMessage, OutboundMessage, SessionLayout};
 use rusqlite::Connection;
 
 use crate::delegation::SpecialistTicket;
@@ -222,6 +223,15 @@ where
     // gated against it (sender permissions + engagement/sticky), so failing to
     // open it is fatal — serving ungated would bypass the deny-by-default gate.
     let conn = open_central(&opts.central_db_path).map_err(|e| HostError::Db(e.to_string()))?;
+
+    // Before serving, rebuild the central scheduled-work projection from each
+    // session's per-session source of truth, so a schedule survives a central
+    // loss or a crash-torn write. Idempotent: with both already in sync it is a
+    // no-op. Only meaningful when the scheduler sweeps (which also guarantees the
+    // projection tables exist), so it is gated on a configured scheduler.
+    if opts.scheduler.is_some() {
+        repair_existing_sessions(&conn, &opts);
+    }
 
     // A shared reborrow for the sink: `start` is done, and `deliver` only needs
     // `&self`, so the listener can hold the channel immutably while it runs.
@@ -668,6 +678,45 @@ where
     }
 }
 
+/// Rebuild the central projection for every existing session under this group
+/// from its per-session source of truth. Run once at serve startup before the
+/// listener: a schedule whose central row was lost (crash between the session
+/// write and the projection upsert) is reconstructed, and a phantom-fired
+/// occurrence is reset so it can fire. Each session is independent — one bad
+/// session is logged and skipped, never aborting the rest. Sessions with no
+/// scheduling rows reproject nothing.
+fn repair_existing_sessions(conn: &Connection, opts: &SlackServeOptions) {
+    let group_dir = opts.sessions_dir.join(&opts.group);
+    let entries = match std::fs::read_dir(&group_dir) {
+        Ok(entries) => entries,
+        // No sessions yet (first run) is the common case, not an error.
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let session_id = entry.file_name().to_string_lossy().into_owned();
+        let layout = match SessionLayout::derive(&opts.sessions_dir, &opts.group, &session_id) {
+            Ok(layout) => layout,
+            Err(err) => {
+                eprintln!("slack: skipping repair for {session_id}: {err}");
+                continue;
+            }
+        };
+        if !session_exists(&layout) {
+            continue;
+        }
+        match repair_session_projection(conn, &layout, &session_id) {
+            Ok(report) if report.items_reprojected > 0 || report.occurrences_unfired > 0 => {
+                eprintln!(
+                    "slack: repaired schedules for {session_id}: {} item(s) reprojected, {} occurrence(s) unfired",
+                    report.items_reprojected, report.occurrences_unfired
+                );
+            }
+            Ok(_) => {}
+            Err(err) => eprintln!("slack: repairing schedules for {session_id} failed: {err}"),
+        }
+    }
+}
+
 /// Fire any due scheduled items, exactly once each. Runs on the serve thread
 /// between inbound frames (see [`SchedulerTickConfig`]). Sticky-engagement
 /// windows are expired on the same cadence (the daemon has no other driver for
@@ -769,6 +818,30 @@ fn scheduler_tick<A, R, F>(
             deliver_reply(conn, channel, &target, &session_id, opts, reply, None);
         }
 
+        // Advance the per-session source of truth (occurrence sequence + next
+        // due time, or completion for a one-off) before the central finalize, so
+        // a crash in this window leaves the source *ahead* of the projection —
+        // which repair reconciles forward — rather than behind, which would
+        // re-fire an occurrence the source already recorded. An item with no
+        // source row (created before this path) just skips to the central
+        // finalize. The session write reuses `lease.occurrence`, so its sequence
+        // matches what the central claim allocated.
+        match session_layout(opts, &session_id) {
+            Ok(layout) => match latest_meta(&layout, &item.id) {
+                Ok(Some(mut meta)) => {
+                    meta.record_fired(&lease.occurrence);
+                    if let Err(err) = write_meta(&layout, &meta) {
+                        eprintln!("slack: recording a fired schedule for channel {session_id} failed: {err}");
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    eprintln!("slack: reading schedule source for channel {session_id} failed: {err}")
+                }
+            },
+            Err(err) => eprintln!("slack: {err}"),
+        }
+
         // The turn ran, so finalize the firing — even if a delivery hiccuped,
         // re-running the turn would double-process. Delivery failures are logged,
         // not retried, in this first cut.
@@ -835,25 +908,25 @@ fn deliver_reply<A>(
     A: SlackApi,
 {
     if reply.kind == "schedule_message" {
-        if let Err(err) = create_schedule(conn, session_id, &reply.content) {
+        if let Err(err) = create_schedule(conn, opts, session_id, &reply.content) {
             eprintln!("slack: scheduling a message from a turn in channel {session_id} failed: {err}");
         }
         return;
     }
     if reply.kind == "cancel_schedule" {
-        if let Err(err) = cancel_schedule(conn, &reply.content) {
+        if let Err(err) = cancel_schedule(conn, opts, session_id, &reply.content) {
             eprintln!("slack: cancelling a schedule from a turn in channel {session_id} failed: {err}");
         }
         return;
     }
     if reply.kind == "pause_schedule" {
-        if let Err(err) = pause_schedule(conn, &reply.content) {
+        if let Err(err) = pause_schedule(conn, opts, session_id, &reply.content) {
             eprintln!("slack: pausing a schedule from a turn in channel {session_id} failed: {err}");
         }
         return;
     }
     if reply.kind == "resume_schedule" {
-        if let Err(err) = resume_schedule(conn, &reply.content) {
+        if let Err(err) = resume_schedule(conn, opts, session_id, &reply.content) {
             eprintln!("slack: resuming a schedule from a turn in channel {session_id} failed: {err}");
         }
         return;
@@ -902,13 +975,24 @@ fn deliver_reply<A>(
     }
 }
 
-/// Project a scheduled item from an agent's `schedule_message` action into the
-/// central index, due in the session the turn ran in. The host owns the item's
-/// identity, agent group, and creation time; the agent supplies only the intent
-/// text and timing. Central-only, matching the operator stopgap
-/// ([`crate::admin::create_scheduled_message`]) — durably reconstructing items
-/// from the per-session source of truth is a separate concern.
-fn create_schedule(conn: &Connection, session_id: &str, payload: &str) -> Result<(), String> {
+/// Derive the per-session layout the scheduling source of truth is written to.
+fn session_layout(opts: &SlackServeOptions, session_id: &str) -> Result<SessionLayout, String> {
+    SessionLayout::derive(&opts.sessions_dir, &opts.group, session_id)
+        .map_err(|e| format!("deriving session {session_id}: {e}"))
+}
+
+/// Project a scheduled item from an agent's `schedule_message` action, due in the
+/// session the turn ran in. The host owns the item's identity, agent group, and
+/// creation time; the agent supplies only the intent text and timing. The item's
+/// metadata is written to the session's `messages_in` as the source of truth
+/// first, then projected into the central index — so a central write lost to a
+/// crash is rebuilt from the session on the next serve start ([`repair_session_projection`]).
+fn create_schedule(
+    conn: &Connection,
+    opts: &SlackServeOptions,
+    session_id: &str,
+    payload: &str,
+) -> Result<(), String> {
     let payload: SchedulePayload =
         serde_json::from_str(payload).map_err(|e| format!("bad schedule_message payload: {e}"))?;
     let now = now_epoch();
@@ -926,8 +1010,33 @@ fn create_schedule(conn: &Connection, session_id: &str, payload: &str) -> Result
         ContextPolicy::default(),
     )
     .map_err(|e| e.to_string())?;
+    let layout = session_layout(opts, session_id)?;
+    write_meta(&layout, &meta).map_err(|e| e.to_string())?;
     upsert_item(conn, &meta, Some(session_id)).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Apply a lifecycle transition to the item's per-session source of truth before
+/// the central projection moves, so a repair reconstructs the new status. When
+/// the session has no source row for the item — created before this path, or via
+/// the operator stopgap — the source write is skipped (the caller's central
+/// transition still runs, matching the prior central-only behavior). An illegal
+/// transition (e.g. resuming an active item) is a silent no-op here, mirroring
+/// the central projection's own no-op on the same input.
+fn transition_source(
+    opts: &SlackServeOptions,
+    session_id: &str,
+    item_id: &str,
+    transition: LifecycleTransition,
+) -> Result<(), String> {
+    let layout = session_layout(opts, session_id)?;
+    let Some(mut meta) = latest_meta(&layout, item_id).map_err(|e| e.to_string())? else {
+        return Ok(());
+    };
+    if meta.transition(transition).is_err() {
+        return Ok(());
+    }
+    write_meta(&layout, &meta).map_err(|e| e.to_string())
 }
 
 /// The wire payload a schedule-lifecycle action (`cancel_schedule`,
@@ -949,8 +1058,14 @@ impl ScheduleItemRef {
 /// transition on the central index, matching [`create_schedule`]'s central-only
 /// projection; an unknown or already-terminal id is a silent no-op (see
 /// [`assistant_scheduler::cancel_item`]).
-fn cancel_schedule(conn: &Connection, payload: &str) -> Result<(), String> {
+fn cancel_schedule(
+    conn: &Connection,
+    opts: &SlackServeOptions,
+    session_id: &str,
+    payload: &str,
+) -> Result<(), String> {
     let payload = ScheduleItemRef::parse("cancel_schedule", payload)?;
+    transition_source(opts, session_id, &payload.scheduled_item_id, LifecycleTransition::Cancel)?;
     cancel_item(conn, &payload.scheduled_item_id).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -959,8 +1074,14 @@ fn cancel_schedule(conn: &Connection, payload: &str) -> Result<(), String> {
 /// from the swept set until resumed. Central-only like [`cancel_schedule`]; only
 /// an `active` item pauses, so an unknown or non-active id is a silent no-op (see
 /// [`assistant_scheduler::pause_item`]).
-fn pause_schedule(conn: &Connection, payload: &str) -> Result<(), String> {
+fn pause_schedule(
+    conn: &Connection,
+    opts: &SlackServeOptions,
+    session_id: &str,
+    payload: &str,
+) -> Result<(), String> {
     let payload = ScheduleItemRef::parse("pause_schedule", payload)?;
+    transition_source(opts, session_id, &payload.scheduled_item_id, LifecycleTransition::Pause)?;
     pause_item(conn, &payload.scheduled_item_id).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -969,8 +1090,14 @@ fn pause_schedule(conn: &Connection, payload: &str) -> Result<(), String> {
 /// returning it to the swept set. Central-only like [`cancel_schedule`]; only a
 /// `paused` item resumes, so an unknown or non-paused id is a silent no-op (see
 /// [`assistant_scheduler::resume_item`]).
-fn resume_schedule(conn: &Connection, payload: &str) -> Result<(), String> {
+fn resume_schedule(
+    conn: &Connection,
+    opts: &SlackServeOptions,
+    session_id: &str,
+    payload: &str,
+) -> Result<(), String> {
     let payload = ScheduleItemRef::parse("resume_schedule", payload)?;
+    transition_source(opts, session_id, &payload.scheduled_item_id, LifecycleTransition::Resume)?;
     resume_item(conn, &payload.scheduled_item_id).map_err(|e| e.to_string())?;
     Ok(())
 }

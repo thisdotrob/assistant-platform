@@ -32,8 +32,8 @@ pub use schema::{
 pub use session::{
     current_inbound_compat, current_outbound_compat, enqueue_inbound, enqueue_inbound_keyed,
     init_session, mark_delivered, max_delivered_seq, open_inbound, open_outbound_read,
-    read_outbound, session_exists, set_destinations, set_routing, verify_sequence_parity,
-    Destination, InboundMessage, OutboundMessage,
+    read_outbound, session_exists, set_destinations, set_routing, upsert_inbound_meta,
+    verify_sequence_parity, Destination, InboundMessage, OutboundMessage,
 };
 
 pub const MODULE_ID: &str = "assistant-session";
