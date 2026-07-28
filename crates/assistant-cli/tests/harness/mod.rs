@@ -478,9 +478,18 @@ impl WebApp for InstanceWebApp<'_> {
                 id: item.id,
                 description: item.intent,
                 next_run_at: item.process_after,
-                recurrence: item
-                    .recurrence
-                    .map(|Recurrence::Every { seconds }| format!("every {seconds}s")),
+                recurrence: item.recurrence.map(|rec| match rec {
+                    Recurrence::Every { seconds } => format!("every {seconds}s"),
+                    Recurrence::Daily { minute_of_day, tz } => {
+                        format!("daily at {minute_of_day} {tz}")
+                    }
+                    Recurrence::Weekly { minute_of_day, tz, .. } => {
+                        format!("weekly at {minute_of_day} {tz}")
+                    }
+                    Recurrence::Monthly { day, minute_of_day, tz } => {
+                        format!("monthly on {day} at {minute_of_day} {tz}")
+                    }
+                }),
             })
             .collect()
     }

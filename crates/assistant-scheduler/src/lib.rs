@@ -19,6 +19,7 @@ pub use lease::{
 pub use model::{
     generate_scheduled_item_id, ContextPolicy, EpochSecs, LifecycleTransition, Occurrence,
     Recurrence, Revision, ScheduleError, ScheduleIntent, ScheduleStatus, ScheduledMessageMeta,
+    Weekday,
 };
 pub use projection::{
     advance_recurrence, cancel_item, complete_item, item_status, list_items, migrations,

@@ -26,7 +26,7 @@ use assistant_permissions::{add_user_dm, create_user};
 use assistant_router::{count_drops_by_reason, DropReason};
 use assistant_scheduler::{
     item_status, list_items, next_claimable_occurrence, pause_item, upsert_item, ContextPolicy,
-    Recurrence, ScheduleIntent, ScheduleStatus, ScheduledMessageMeta,
+    Recurrence, ScheduleIntent, ScheduleStatus, ScheduledMessageMeta, Weekday,
 };
 use assistant_runtime_docker::{FakeRuntime, ImageRef, OneCliReadiness, RunnerAuthMode};
 use assistant_session::{
@@ -1151,6 +1151,85 @@ fn a_recurring_item_fires_each_tick_and_advances_drift_free() {
         .unwrap()
         .expect("the recurring item keeps producing occurrences");
     assert_eq!(next.sequence, 3, "the next occurrence is the third in the series");
+    drop(conn);
+
+    verify_sequence_parity(&layout).unwrap();
+
+    shim_stop.store(true, Ordering::Relaxed);
+    shim.join().unwrap();
+}
+
+#[test]
+fn a_calendar_schedule_message_records_a_recurrence_with_a_computed_first_fire() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sessions = tmp.path().join("sessions");
+    let central = tmp.path().join("central.db");
+    migrate_central(&central);
+    register_dm(&central, "rob", "U1");
+
+    let layout = SessionLayout::derive(&sessions, "slack", "C1").unwrap();
+    init_session(&layout).unwrap();
+
+    // A calendar recurrence carries a local wall-clock time, not after_seconds;
+    // the host parses it into a canonical Weekly recurrence and computes the
+    // first fire itself.
+    let shim_stop = Arc::new(AtomicBool::new(false));
+    let payload = r#"{"text":"weekday standup","calendar":{"kind":"weekly","days":["mon","tue","wed","thu","fri"],"at":"09:00","tz":"Europe/London"}}"#;
+    let shim = spawn_scheduling_shim(layout.clone(), shim_stop.clone(), payload.to_string());
+
+    let exhausted = Rc::new(Cell::new(false));
+    let posts: Posts = Rc::new(RefCell::new(Vec::new()));
+    let mut channel = SlackChannel::new(FakeApi {
+        posts: posts.clone(),
+        on_post: Rc::new(|| {}),
+    });
+    let mut opener = ScriptedOpener {
+        frames: vec![events_api(
+            "env-1",
+            r#"{"type":"app_mention","channel":"C1","user":"U1","ts":"100.1","text":"standup every weekday at 9"}"#,
+        )],
+        handed_out: false,
+        exhausted: exhausted.clone(),
+    };
+    let opts = test_opts(sessions, central.clone());
+
+    let stop = {
+        let exhausted = exhausted.clone();
+        move || exhausted.get()
+    };
+    serve_slack(&mut opener, &mut channel, opts, FakeRuntime::new, &stop).unwrap();
+
+    assert!(
+        posts.borrow().is_empty(),
+        "a schedule_message action must not be posted to Slack: {:?}",
+        posts.borrow()
+    );
+
+    let conn = open_central(&central).unwrap();
+    let items = list_items(&conn, 1, Some(ScheduleStatus::Active)).unwrap();
+    assert_eq!(items.len(), 1, "the turn created exactly one active scheduled item");
+    assert_eq!(items[0].session_id.as_deref(), Some("C1"));
+    assert_eq!(items[0].intent, "weekday standup");
+    assert_eq!(
+        items[0].recurrence,
+        Some(Recurrence::Weekly {
+            weekdays: vec![
+                Weekday::Mon,
+                Weekday::Tue,
+                Weekday::Wed,
+                Weekday::Thu,
+                Weekday::Fri
+            ],
+            minute_of_day: 9 * 60,
+            tz: "Europe/London".into(),
+        })
+    );
+    let due = items[0].process_after.expect("a calendar item has a computed first fire");
+    assert!(
+        due >= now_secs(),
+        "the computed first fire is in the future: due={due} now={}",
+        now_secs()
+    );
     drop(conn);
 
     verify_sequence_parity(&layout).unwrap();

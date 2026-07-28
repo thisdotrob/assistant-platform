@@ -66,7 +66,12 @@ delivery paths), projects a one-off or recurring item into the central index due
 in the turn's own session, and suppresses delivery (a scheduling action is not
 user-visible text, so the run's own confirmation text is what the user sees). The
 host owns the item's identity, agent group, and creation time; the agent supplies
-only the intent text and timing. This is central-only, matching
+only the intent text and timing. Timing is one of three forms: `after_seconds`
+alone (one-off), `after_seconds` + `every_seconds` (fixed interval), or a
+`calendar` recurrence carrying a human `at` (`"HH:MM"`) and IANA `tz` which the
+host parses into the canonical scheduler recurrence (`Daily`/`Weekly`/`Monthly`)
+and uses to compute the first fire (`recurrence.first_on_or_after(now)`), so the
+DST-safe local wall-clock time is preserved rather than a fixed second offset. This is central-only, matching
 `admin::create_scheduled_message`; durably reconstructing live-created items from
 a per-session source of truth, the runner-side tool wiring that makes an agent
 emit the action, and the terminal-path tick remain deferred.

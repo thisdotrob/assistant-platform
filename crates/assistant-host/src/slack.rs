@@ -38,8 +38,9 @@ use assistant_scheduler::{
     advance_recurrence, cancel_item, claim_due, complete_item, complete_occurrence, latest_meta,
     list_items, pause_item, repair_session_projection, resume_item, upsert_item, write_meta,
     ContextPolicy, EpochSecs, LifecycleTransition, Occurrence, ProjectedItem, ProjectionError,
-    Recurrence, ScheduleIntent, ScheduleStatus, ScheduledMessageMeta,
+    Recurrence, ScheduleIntent, ScheduleStatus, ScheduledMessageMeta, Weekday,
 };
+use assistant_agent_protocol::CalendarRecurrence;
 use assistant_session::{session_exists, InboundMessage, OutboundMessage, SessionLayout};
 use rusqlite::Connection;
 
@@ -880,14 +881,19 @@ fn finalize_firing(
 
 /// The wire payload an agent's `schedule_message` action carries in its outbound
 /// `content` (the serde body of [`assistant_agent_protocol::OutboundAction::ScheduleMessage`]
-/// without the action tag, which travels as the row `kind`). `every_seconds`
-/// absent = fire once.
+/// without the action tag, which travels as the row `kind`). Timing is one of:
+/// `after_seconds` alone (fire once), `after_seconds` + `every_seconds` (fixed
+/// interval), or `calendar` (wall-clock recurrence — the host computes the first
+/// fire, so `after_seconds` is ignored).
 #[derive(serde::Deserialize)]
 struct SchedulePayload {
     text: String,
-    after_seconds: i64,
+    #[serde(default)]
+    after_seconds: Option<i64>,
     #[serde(default)]
     every_seconds: Option<i64>,
+    #[serde(default)]
+    calendar: Option<CalendarRecurrence>,
 }
 
 /// Deliver one reply to Slack, or — when it is a side-effect action
@@ -996,16 +1002,16 @@ fn create_schedule(
     let payload: SchedulePayload =
         serde_json::from_str(payload).map_err(|e| format!("bad schedule_message payload: {e}"))?;
     let now = now_epoch();
+    let (process_after, recurrence) = resolve_timing(&payload, now)?;
     let intent = ScheduleIntent {
         created_by: "agent".to_string(),
         summary: payload.text,
         created_at: now,
     };
-    let recurrence = payload.every_seconds.map(|seconds| Recurrence::Every { seconds });
     let meta = ScheduledMessageMeta::create(
         HOST_AGENT_GROUP,
         intent,
-        now + payload.after_seconds,
+        process_after,
         recurrence,
         ContextPolicy::default(),
     )
@@ -1014,6 +1020,79 @@ fn create_schedule(
     write_meta(&layout, &meta).map_err(|e| e.to_string())?;
     upsert_item(conn, &meta, Some(session_id)).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Derive an item's first-fire time and recurrence from a `schedule_message`
+/// payload. A `calendar` recurrence computes its own first fire from `now` (so
+/// `after_seconds` is ignored); otherwise the first fire is `now + after_seconds`
+/// and `every_seconds`, if present, sets a fixed interval.
+fn resolve_timing(
+    payload: &SchedulePayload,
+    now: EpochSecs,
+) -> Result<(EpochSecs, Option<Recurrence>), String> {
+    if let Some(calendar) = &payload.calendar {
+        let recurrence = calendar_to_recurrence(calendar)?;
+        recurrence.validate().map_err(|e| e.to_string())?;
+        let first = recurrence
+            .first_on_or_after(now)
+            .ok_or_else(|| "calendar recurrence produced no first occurrence".to_string())?;
+        return Ok((first, Some(recurrence)));
+    }
+    let recurrence = payload
+        .every_seconds
+        .map(|seconds| Recurrence::Every { seconds });
+    Ok((now + payload.after_seconds.unwrap_or(0), recurrence))
+}
+
+/// Translate the human-facing wire calendar spec (`HH:MM` local time, IANA tz,
+/// weekday names) into the canonical scheduler recurrence.
+fn calendar_to_recurrence(spec: &CalendarRecurrence) -> Result<Recurrence, String> {
+    match spec {
+        CalendarRecurrence::Daily { at, tz } => Ok(Recurrence::Daily {
+            minute_of_day: parse_hhmm(at)?,
+            tz: tz.clone(),
+        }),
+        CalendarRecurrence::Weekly { days, at, tz } => Ok(Recurrence::Weekly {
+            weekdays: parse_weekdays(days)?,
+            minute_of_day: parse_hhmm(at)?,
+            tz: tz.clone(),
+        }),
+        CalendarRecurrence::Monthly { day, at, tz } => Ok(Recurrence::Monthly {
+            day: *day,
+            minute_of_day: parse_hhmm(at)?,
+            tz: tz.clone(),
+        }),
+    }
+}
+
+/// Parse an `HH:MM` 24-hour time into minutes since local midnight.
+fn parse_hhmm(at: &str) -> Result<u32, String> {
+    let (h, m) = at
+        .split_once(':')
+        .ok_or_else(|| format!("time {at:?} must be HH:MM"))?;
+    let h: u32 = h.parse().map_err(|_| format!("bad hour in {at:?}"))?;
+    let m: u32 = m.parse().map_err(|_| format!("bad minute in {at:?}"))?;
+    if h > 23 || m > 59 {
+        return Err(format!("time {at:?} out of range"));
+    }
+    Ok(h * 60 + m)
+}
+
+fn parse_weekdays(days: &[String]) -> Result<Vec<Weekday>, String> {
+    days.iter().map(|d| parse_weekday(d)).collect()
+}
+
+fn parse_weekday(day: &str) -> Result<Weekday, String> {
+    match day.to_ascii_lowercase().as_str() {
+        "mon" | "monday" => Ok(Weekday::Mon),
+        "tue" | "tuesday" => Ok(Weekday::Tue),
+        "wed" | "wednesday" => Ok(Weekday::Wed),
+        "thu" | "thursday" => Ok(Weekday::Thu),
+        "fri" | "friday" => Ok(Weekday::Fri),
+        "sat" | "saturday" => Ok(Weekday::Sat),
+        "sun" | "sunday" => Ok(Weekday::Sun),
+        other => Err(format!("unknown weekday {other:?}")),
+    }
 }
 
 /// Apply a lifecycle transition to the item's per-session source of truth before

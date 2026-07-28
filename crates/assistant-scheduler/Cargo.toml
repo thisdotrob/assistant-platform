@@ -8,6 +8,8 @@ publish.workspace = true
 [dependencies]
 assistant-db = { path = "../assistant-db" }
 assistant-session = { path = "../assistant-session" }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
 rusqlite = "0.32.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

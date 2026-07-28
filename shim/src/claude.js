@@ -62,7 +62,7 @@ export function buildSystemPrompt(specialists) {
     'You are a helpful assistant operating inside a Slack workspace. You reply to people in the channel or thread where they message you.',
     '',
     'Your own tools are:',
-    '- schedule_message: set a one-off reminder or a recurring check-in, processed as a fresh turn when it fires.',
+    '- schedule_message: set a one-off reminder, a fixed-interval check-in, or a calendar recurrence at a local time (e.g. every weekday at 9am), processed as a fresh turn when it fires.',
     '- cancel_schedule: cancel one of your existing scheduled items so it stops firing for good.',
     '- pause_schedule: temporarily suspend one of your scheduled items so it stops firing until you resume it.',
     '- resume_schedule: resume a paused scheduled item so it fires again.',
@@ -76,6 +76,8 @@ export function buildSystemPrompt(specialists) {
   lines.push(
     '',
     'Beyond those tools you converse: answer questions, summarise, and help think things through using what the user tells you and what you already know.',
+    '',
+    'For a recurrence at a clock time (e.g. "every weekday at 9am", "the 1st of each month"), use schedule_message with the calendar option and a local time — not a raw interval. Calendar recurrence needs the user\'s timezone as an IANA name (e.g. "Europe/London"): use one they have given you, otherwise ask before scheduling. Use after_seconds (optionally with every_seconds) only for one-off reminders or plain fixed intervals.',
     '',
     'When you have scheduled items, the latest list is injected each turn as a <schedules> block, each line carrying the item id (and a "paused" marker for any you have suspended). Use those ids to answer "what reminders do I have?" and to manage them: pass the matching id to cancel_schedule to stop one for good, pause_schedule to suspend an active one, or resume_schedule to restart a paused one. Never invent an id — only act on one that appears in that block.',
     '',
@@ -103,13 +105,33 @@ export function buildSystemPrompt(specialists) {
   return lines.join('\n');
 }
 
+// A short human phrase for a schedule request, used only in the tool's
+// confirmation text (the host owns the real timing).
+function describeSchedule(args) {
+  const cal = args.calendar;
+  if (cal != null) {
+    if (cal.kind === 'weekly') {
+      const days = (cal.days ?? []).join(', ');
+      return `weekly on ${days} at ${cal.at} ${cal.tz}`;
+    }
+    if (cal.kind === 'monthly') {
+      return `monthly on day ${cal.day} at ${cal.at} ${cal.tz}`;
+    }
+    return `daily at ${cal.at} ${cal.tz}`;
+  }
+  const start = args.after_seconds ?? 0;
+  return args.every_seconds != null
+    ? `every ${args.every_seconds}s, starting in ${start}s`
+    : `in ${start}s`;
+}
+
 // `memory` is the host's `<retrieved_memories>` block (or null/empty). When
 // present it is prepended as a context preamble ahead of the user's message,
 // mirroring the v1 pre-reply RAG layout (stored context first, then the turn).
 //
 // Returns `{ text, scheduled, cancellations, pauses, resumes, memories,
 // delegations }`: the assistant's final text, a list of
-// `{ text, after_seconds, every_seconds? }` schedule requests, lists of
+// `{ text, after_seconds?, every_seconds?, calendar? }` schedule requests, lists of
 // `{ scheduled_item_id }` cancellation / pause / resume requests, a list of
 // `{ content, title? }` memory-save requests, and a list of
 // `{ specialist, goal, facts?, constraints? }` delegation requests, all collected
@@ -130,28 +152,56 @@ export async function runClaudeTurn(userText, memory) {
   const tools = [
     tool(
       'schedule_message',
-      'Schedule a message to be processed in this channel later — use for reminders or recurring check-ins. The scheduled text is processed as a fresh turn when it fires.',
+      'Schedule a message to be processed in this channel later — use for reminders or recurring check-ins. The scheduled text is processed as a fresh turn when it fires. Choose exactly one timing form: after_seconds (a one-off, or with every_seconds a fixed interval), or calendar (a recurring local wall-clock time such as every weekday at 9am).',
       {
         text: z.string().describe('The message/instruction to process when the schedule fires.'),
         after_seconds: z
           .number()
           .int()
-          .describe('Seconds from now until the first (or only) firing.'),
+          .optional()
+          .describe(
+            'Seconds from now until the first (or only) firing. Use for a one-off reminder, or with every_seconds for a fixed interval. Omit when using calendar.',
+          ),
         every_seconds: z
           .number()
           .int()
           .optional()
-          .describe('Optional fixed recurrence interval in seconds; omit for a one-time reminder.'),
+          .describe(
+            'Optional fixed recurrence interval in seconds, paired with after_seconds; omit for a one-time reminder or when using calendar.',
+          ),
+        calendar: z
+          .object({
+            kind: z
+              .enum(['daily', 'weekly', 'monthly'])
+              .describe('Recurrence shape: daily, weekly (on given weekdays), or monthly.'),
+            at: z.string().describe('Local wall-clock time as "HH:MM" (24-hour), e.g. "09:00".'),
+            tz: z
+              .string()
+              .describe('IANA timezone name for the local time, e.g. "Europe/London". Ask the user if unknown.'),
+            days: z
+              .array(z.enum(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']))
+              .optional()
+              .describe('For kind=weekly: the weekdays it fires on.'),
+            day: z
+              .number()
+              .int()
+              .optional()
+              .describe('For kind=monthly: day of the month 1-31 (clamped to the month length).'),
+          })
+          .optional()
+          .describe(
+            'Calendar-style recurrence at a local wall-clock time (DST-safe). Provide this instead of after_seconds/every_seconds. Always include the user\'s timezone.',
+          ),
       },
       async (args) => {
-        const entry = { text: args.text, after_seconds: args.after_seconds };
+        const entry = { text: args.text };
+        if (args.after_seconds != null) entry.after_seconds = args.after_seconds;
         if (args.every_seconds != null) entry.every_seconds = args.every_seconds;
+        if (args.calendar != null) entry.calendar = args.calendar;
         scheduled.push(entry);
-        const when =
-          args.every_seconds != null
-            ? `every ${args.every_seconds}s, starting in ${args.after_seconds}s`
-            : `in ${args.after_seconds}s`;
-        return { content: [{ type: 'text', text: `Scheduled "${args.text}" ${when}.` }] };
+        return {
+          content: [{ type: 'text', text: `Scheduled "${args.text}" ${describeSchedule(args)}.` }],
+        };
       },
     ),
     tool(

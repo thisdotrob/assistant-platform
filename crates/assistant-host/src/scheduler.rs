@@ -20,7 +20,7 @@ use std::path::Path;
 use assistant_router::expire_sticky;
 use assistant_runtime_docker::ContainerRuntime;
 use assistant_scheduler::{
-    claim_due, complete_occurrence, list_items, ProjectedItem, Recurrence, ScheduleStatus,
+    claim_due, complete_occurrence, list_items, ProjectedItem, Recurrence, ScheduleStatus, Weekday,
 };
 use assistant_session::{InboundMessage, SessionLayout};
 use rusqlite::Connection;
@@ -181,10 +181,53 @@ fn render_schedule_line(item: &ProjectedItem, now: i64) -> String {
     };
     let recurrence = match &item.recurrence {
         None => "one-off".to_string(),
-        Some(Recurrence::Every { seconds }) => format!("repeats every {}", human_duration(*seconds)),
+        Some(rec) => describe_recurrence(rec),
     };
     let paused = if item.status == ScheduleStatus::Paused { " | paused" } else { "" };
     format!("- id={} | \"{summary}\" | next: {due} | {recurrence}{paused}", item.id)
+}
+
+/// A human-readable phrase for a recurrence, shown in the `<schedules>` block.
+fn describe_recurrence(rec: &Recurrence) -> String {
+    match rec {
+        Recurrence::Every { seconds } => format!("repeats every {}", human_duration(*seconds)),
+        Recurrence::Daily { minute_of_day, tz } => {
+            format!("daily at {} {tz}", hhmm(*minute_of_day))
+        }
+        Recurrence::Weekly {
+            weekdays,
+            minute_of_day,
+            tz,
+        } => {
+            let days = weekdays
+                .iter()
+                .map(|w| weekday_label(*w))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("weekly on {days} at {} {tz}", hhmm(*minute_of_day))
+        }
+        Recurrence::Monthly {
+            day,
+            minute_of_day,
+            tz,
+        } => format!("monthly on day {day} at {} {tz}", hhmm(*minute_of_day)),
+    }
+}
+
+fn hhmm(minute_of_day: u32) -> String {
+    format!("{:02}:{:02}", minute_of_day / 60, minute_of_day % 60)
+}
+
+fn weekday_label(w: Weekday) -> &'static str {
+    match w {
+        Weekday::Mon => "Mon",
+        Weekday::Tue => "Tue",
+        Weekday::Wed => "Wed",
+        Weekday::Thu => "Thu",
+        Weekday::Fri => "Fri",
+        Weekday::Sat => "Sat",
+        Weekday::Sun => "Sun",
+    }
 }
 
 /// A compact human duration for a non-negative second count (largest whole unit:
@@ -209,6 +252,7 @@ mod tests {
     use assistant_db::{apply, baseline_migrations, baseline_owner_modules};
     use assistant_scheduler::{
         pause_item, upsert_item, ContextPolicy, Recurrence, ScheduleIntent, ScheduledMessageMeta,
+        Weekday,
     };
 
     fn central() -> Connection {
@@ -256,6 +300,48 @@ mod tests {
         assert!(block.contains(&format!("id={recurring}")));
         assert!(block.contains("\"Standup nudge\" | next: in 1h | repeats every 1d"));
         assert!(!block.contains("other agent"), "cross-agent item must not appear");
+    }
+
+    #[test]
+    fn calendar_recurrences_render_their_human_phrase() {
+        let conn = central();
+        let seed_cal = |summary: &str, due: i64, rec: Recurrence| {
+            let meta = ScheduledMessageMeta::create(
+                1,
+                ScheduleIntent { created_by: "u".into(), summary: summary.into(), created_at: 0 },
+                due,
+                Some(rec),
+                ContextPolicy::default(),
+            )
+            .unwrap();
+            upsert_item(&conn, &meta, Some("C1")).unwrap();
+        };
+        seed_cal(
+            "Morning check-in",
+            2_000,
+            Recurrence::Daily { minute_of_day: 9 * 60, tz: "Europe/London".into() },
+        );
+        seed_cal(
+            "Standup",
+            2_100,
+            Recurrence::Weekly {
+                weekdays: vec![Weekday::Mon, Weekday::Wed, Weekday::Fri],
+                minute_of_day: 10 * 60 + 30,
+                tz: "America/New_York".into(),
+            },
+        );
+        seed_cal(
+            "Rent reminder",
+            2_200,
+            Recurrence::Monthly { day: 1, minute_of_day: 8 * 60, tz: "Europe/London".into() },
+        );
+
+        let block = render_schedules_block(&conn, 1, 1_000, 5).unwrap();
+        assert!(block.contains("\"Morning check-in\" | next: in 16m | daily at 09:00 Europe/London"));
+        assert!(block.contains(
+            "\"Standup\" | next: in 18m | weekly on Mon, Wed, Fri at 10:30 America/New_York"
+        ));
+        assert!(block.contains("\"Rent reminder\" | next: in 20m | monthly on day 1 at 08:00 Europe/London"));
     }
 
     #[test]

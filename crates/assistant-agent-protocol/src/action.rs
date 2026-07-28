@@ -43,12 +43,19 @@ pub enum OutboundAction {
     /// Schedule a future turn in the current session. Not a user-visible send:
     /// it records a scheduled item (fired later by the host's scheduler tick),
     /// so the run's final text still delivers the user-facing confirmation.
-    /// `every_seconds` recurs on a fixed interval; absent = fire once.
+    ///
+    /// Timing is one of three mutually exclusive forms: `after_seconds` alone
+    /// fires once; `after_seconds` + `every_seconds` recurs on a fixed interval;
+    /// `calendar` recurs at a wall-clock time (the host computes the first fire,
+    /// so `after_seconds` is ignored when `calendar` is present).
     ScheduleMessage {
         text: String,
-        after_seconds: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after_seconds: Option<i64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         every_seconds: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        calendar: Option<CalendarRecurrence>,
     },
     /// Persist a memory for reuse in later turns. Not a user-visible send: the
     /// host writes a catalog-indexed markdown note as a side effect, so the
@@ -80,6 +87,26 @@ pub enum OutboundAction {
     ResumeSchedule {
         scheduled_item_id: String,
     },
+}
+
+/// A calendar-based recurrence carried by `schedule_message`. The wire form is
+/// human-facing — `at` is a `"HH:MM"` 24-hour local time and `tz` an IANA name
+/// (e.g. `"Europe/London"`) — which the host parses into the canonical scheduler
+/// recurrence and uses to compute the first fire.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CalendarRecurrence {
+    /// Every day at `at` local time.
+    Daily { at: String, tz: String },
+    /// The given weekdays (`mon`..`sun`) at `at` local time.
+    Weekly {
+        days: Vec<String>,
+        at: String,
+        tz: String,
+    },
+    /// The given day of the month (`1`..`31`, clamped to month length) at `at`
+    /// local time.
+    Monthly { day: u32, at: String, tz: String },
 }
 
 impl OutboundAction {
@@ -171,13 +198,25 @@ mod tests {
             },
             OutboundAction::ScheduleMessage {
                 text: "stretch".into(),
-                after_seconds: 60,
+                after_seconds: Some(60),
                 every_seconds: Some(3600),
+                calendar: None,
             },
             OutboundAction::ScheduleMessage {
                 text: "once".into(),
-                after_seconds: 60,
+                after_seconds: Some(60),
                 every_seconds: None,
+                calendar: None,
+            },
+            OutboundAction::ScheduleMessage {
+                text: "standup".into(),
+                after_seconds: None,
+                every_seconds: None,
+                calendar: Some(CalendarRecurrence::Weekly {
+                    days: vec!["mon".into(), "wed".into(), "fri".into()],
+                    at: "09:00".into(),
+                    tz: "Europe/London".into(),
+                }),
             },
             OutboundAction::SaveMemory {
                 content: "user prefers terse replies".into(),
@@ -224,8 +263,9 @@ mod tests {
         // Scheduling is a side effect, not the run's visible reply.
         assert!(!OutboundAction::ScheduleMessage {
             text: "t".into(),
-            after_seconds: 60,
+            after_seconds: Some(60),
             every_seconds: None,
+            calendar: None,
         }
         .is_user_visible_send());
         // Saving a memory is a side effect, not the run's visible reply.
@@ -254,13 +294,34 @@ mod tests {
     fn schedule_message_omits_absent_recurrence() {
         let action = OutboundAction::ScheduleMessage {
             text: "once".into(),
-            after_seconds: 90,
+            after_seconds: Some(90),
             every_seconds: None,
+            calendar: None,
         };
         let json = serde_json::to_string(&action).unwrap();
         assert_eq!(
             json,
             r#"{"action":"schedule_message","text":"once","after_seconds":90}"#
+        );
+        let back: OutboundAction = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, action);
+    }
+
+    #[test]
+    fn schedule_message_serializes_a_calendar_recurrence() {
+        let action = OutboundAction::ScheduleMessage {
+            text: "standup".into(),
+            after_seconds: None,
+            every_seconds: None,
+            calendar: Some(CalendarRecurrence::Daily {
+                at: "09:00".into(),
+                tz: "Europe/London".into(),
+            }),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        assert_eq!(
+            json,
+            r#"{"action":"schedule_message","text":"standup","calendar":{"kind":"daily","at":"09:00","tz":"Europe/London"}}"#
         );
         let back: OutboundAction = serde_json::from_str(&json).unwrap();
         assert_eq!(back, action);

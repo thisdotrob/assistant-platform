@@ -19,7 +19,7 @@ pub mod protocol;
 pub mod provider;
 pub mod runner;
 
-pub use action::OutboundAction;
+pub use action::{CalendarRecurrence, OutboundAction};
 pub use envelope::{AgentKind, InboundEnvelope, RunContext, RunResult};
 pub use fallback::{decide_fallback, FallbackDecision, FallbackLedger, SuppressReason};
 pub use fragment::{

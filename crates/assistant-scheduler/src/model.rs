@@ -18,8 +18,11 @@
 //! itself: callers pass `now`, which keeps every behavior deterministically
 //! testable and lets the host control the time source.
 
+use chrono::{Datelike, Duration, LocalResult, NaiveDate, NaiveTime, TimeZone, Weekday as ChronoWeekday};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::str::FromStr;
 
 /// Seconds since the Unix epoch. The scheduler's single time representation.
 pub type EpochSecs = i64;
@@ -57,13 +60,59 @@ impl std::fmt::Display for ScheduleError {
 
 impl std::error::Error for ScheduleError {}
 
+/// A day of the week, used by [`Recurrence::Weekly`]. Serialized as lowercase
+/// (`mon`..`sun`) so the wire form is stable and human-readable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Weekday {
+    Mon,
+    Tue,
+    Wed,
+    Thu,
+    Fri,
+    Sat,
+    Sun,
+}
+
+impl Weekday {
+    fn to_chrono(self) -> ChronoWeekday {
+        match self {
+            Weekday::Mon => ChronoWeekday::Mon,
+            Weekday::Tue => ChronoWeekday::Tue,
+            Weekday::Wed => ChronoWeekday::Wed,
+            Weekday::Thu => ChronoWeekday::Thu,
+            Weekday::Fri => ChronoWeekday::Fri,
+            Weekday::Sat => ChronoWeekday::Sat,
+            Weekday::Sun => ChronoWeekday::Sun,
+        }
+    }
+}
+
 /// How a recurring schedule repeats. Recurrence always advances from the
-/// scheduled occurrence time, never from completion, to avoid drift.
+/// scheduled occurrence time, never from completion, to avoid drift. Calendar
+/// recurrences (`Daily`/`Weekly`/`Monthly`) fire at a wall-clock time in a named
+/// IANA timezone, so "09:00" stays 09:00 across DST transitions; each carries
+/// `minute_of_day` (minutes since local midnight, 0..=1439) and `tz`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Recurrence {
     /// A fixed interval in seconds between occurrences.
     Every { seconds: i64 },
+    /// Every day at `minute_of_day` local time in `tz`.
+    Daily { minute_of_day: u32, tz: String },
+    /// The given weekdays at `minute_of_day` local time in `tz`.
+    Weekly {
+        weekdays: Vec<Weekday>,
+        minute_of_day: u32,
+        tz: String,
+    },
+    /// The given day of the month at `minute_of_day` local time in `tz`. A `day`
+    /// past the month's length is clamped to the last day of that month.
+    Monthly {
+        day: u32,
+        minute_of_day: u32,
+        tz: String,
+    },
 }
 
 impl Recurrence {
@@ -73,6 +122,36 @@ impl Recurrence {
             Recurrence::Every { seconds } => Err(ScheduleError::InvalidRecurrence {
                 detail: format!("interval must be positive, got {seconds}"),
             }),
+            Recurrence::Daily { minute_of_day, tz } => {
+                validate_minute_of_day(*minute_of_day)?;
+                validate_tz(tz)
+            }
+            Recurrence::Weekly {
+                weekdays,
+                minute_of_day,
+                tz,
+            } => {
+                if weekdays.is_empty() {
+                    return Err(ScheduleError::InvalidRecurrence {
+                        detail: "weekly recurrence needs at least one weekday".to_string(),
+                    });
+                }
+                validate_minute_of_day(*minute_of_day)?;
+                validate_tz(tz)
+            }
+            Recurrence::Monthly {
+                day,
+                minute_of_day,
+                tz,
+            } => {
+                if !(1..=31).contains(day) {
+                    return Err(ScheduleError::InvalidRecurrence {
+                        detail: format!("day of month must be 1..=31, got {day}"),
+                    });
+                }
+                validate_minute_of_day(*minute_of_day)?;
+                validate_tz(tz)
+            }
         }
     }
 
@@ -82,6 +161,118 @@ impl Recurrence {
     pub fn next_after(&self, occurrence_scheduled: EpochSecs) -> EpochSecs {
         match self {
             Recurrence::Every { seconds } => occurrence_scheduled + seconds,
+            _ => self
+                .calendar_match(occurrence_scheduled, false)
+                .unwrap_or(occurrence_scheduled + 86_400),
+        }
+    }
+
+    /// The first occurrence at or after `now` for a calendar recurrence; `None`
+    /// for `Every` (whose first fire is the caller-supplied `process_after`).
+    pub fn first_on_or_after(&self, now: EpochSecs) -> Option<EpochSecs> {
+        match self {
+            Recurrence::Every { .. } => None,
+            _ => self.calendar_match(now, true),
+        }
+    }
+
+    /// The first calendar occurrence strictly after `from` (or at/after `from`
+    /// when `inclusive`). Scans forward day by day (bounded), building the local
+    /// wall-clock instant in `tz` and handling DST gaps/overlaps. `None` for
+    /// `Every` or if the timezone fails to parse.
+    fn calendar_match(&self, from: EpochSecs, inclusive: bool) -> Option<EpochSecs> {
+        let (minute_of_day, tz_name) = match self {
+            Recurrence::Every { .. } => return None,
+            Recurrence::Daily { minute_of_day, tz }
+            | Recurrence::Weekly {
+                minute_of_day, tz, ..
+            }
+            | Recurrence::Monthly {
+                minute_of_day, tz, ..
+            } => (*minute_of_day, tz),
+        };
+        let tz = Tz::from_str(tz_name).ok()?;
+        let time = NaiveTime::from_hms_opt(minute_of_day / 60, minute_of_day % 60, 0)?;
+        let start = tz.timestamp_opt(from, 0).single()?.date_naive();
+        // Bounded scan: Daily resolves in ≤2 days, Weekly ≤8, Monthly ≤32; 400
+        // is a safe ceiling that also covers repeated DST-gap retries.
+        let mut date = start;
+        for _ in 0..400 {
+            if self.date_qualifies(date)
+                && let Some(instant) = resolve_local(&tz, date, time)
+            {
+                let epoch = instant.timestamp();
+                if (inclusive && epoch >= from) || (!inclusive && epoch > from) {
+                    return Some(epoch);
+                }
+            }
+            date = date.succ_opt()?;
+        }
+        None
+    }
+
+    /// Whether `date` is a firing day for a calendar recurrence.
+    fn date_qualifies(&self, date: NaiveDate) -> bool {
+        match self {
+            Recurrence::Every { .. } | Recurrence::Daily { .. } => true,
+            Recurrence::Weekly { weekdays, .. } => {
+                weekdays.iter().any(|w| w.to_chrono() == date.weekday())
+            }
+            Recurrence::Monthly { day, .. } => date.day() == clamp_day(*day, date),
+        }
+    }
+}
+
+fn validate_minute_of_day(minute_of_day: u32) -> Result<(), ScheduleError> {
+    if minute_of_day < 1440 {
+        Ok(())
+    } else {
+        Err(ScheduleError::InvalidRecurrence {
+            detail: format!("minute of day must be 0..=1439, got {minute_of_day}"),
+        })
+    }
+}
+
+fn validate_tz(tz: &str) -> Result<(), ScheduleError> {
+    Tz::from_str(tz)
+        .map(|_| ())
+        .map_err(|_| ScheduleError::InvalidRecurrence {
+            detail: format!("unknown timezone {tz:?}"),
+        })
+}
+
+/// The target day-of-month for `date`'s month, clamped to the month's length
+/// (so `day=31` fires on Feb 28/29, Apr 30, etc.).
+fn clamp_day(day: u32, date: NaiveDate) -> u32 {
+    day.min(days_in_month(date.year(), date.month()))
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    let (next_year, next_month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    let first_next = NaiveDate::from_ymd_opt(next_year, next_month, 1).unwrap();
+    first_next.pred_opt().unwrap().day()
+}
+
+/// Resolve a local wall-clock date+time in `tz` to a concrete instant, handling
+/// DST edges: an ambiguous time (fall-back overlap) takes the earlier instant;
+/// a nonexistent time (spring-forward gap) shifts forward an hour so a reminder
+/// still fires that day.
+fn resolve_local(
+    tz: &Tz,
+    date: NaiveDate,
+    time: NaiveTime,
+) -> Option<chrono::DateTime<Tz>> {
+    let naive = date.and_time(time);
+    match tz.from_local_datetime(&naive) {
+        LocalResult::Single(dt) => Some(dt),
+        LocalResult::Ambiguous(earlier, _later) => Some(earlier),
+        LocalResult::None => {
+            let shifted = naive.checked_add_signed(Duration::hours(1))?;
+            tz.from_local_datetime(&shifted).single()
         }
     }
 }
@@ -552,5 +743,149 @@ mod tests {
                 snapshot_ref: "snap_42".into()
             }
         );
+    }
+
+    fn epoch(tz_name: &str, y: i32, mo: u32, d: u32, h: u32, mi: u32) -> EpochSecs {
+        let tz: Tz = tz_name.parse().unwrap();
+        tz.with_ymd_and_hms(y, mo, d, h, mi, 0)
+            .single()
+            .unwrap()
+            .timestamp()
+    }
+
+    #[test]
+    fn daily_fires_at_local_time_and_advances_one_day() {
+        let rec = Recurrence::Daily {
+            minute_of_day: 9 * 60,
+            tz: "UTC".into(),
+        };
+        // Epoch 0 is 1970-01-01 00:00 UTC; first 09:00 is 9h in.
+        assert_eq!(rec.first_on_or_after(0), Some(9 * 3_600));
+        assert_eq!(rec.next_after(9 * 3_600), 86_400 + 9 * 3_600);
+    }
+
+    #[test]
+    fn first_on_or_after_is_inclusive_next_after_is_exclusive() {
+        let rec = Recurrence::Daily {
+            minute_of_day: 9 * 60,
+            tz: "UTC".into(),
+        };
+        let today_nine = 9 * 3_600;
+        // At the exact fire instant, first_on_or_after returns it; next_after skips it.
+        assert_eq!(rec.first_on_or_after(today_nine), Some(today_nine));
+        assert_eq!(rec.next_after(today_nine), 86_400 + today_nine);
+    }
+
+    #[test]
+    fn daily_keeps_local_time_across_spring_forward() {
+        // Europe/London springs forward 2025-03-30; 09:00 local stays 09:00 local,
+        // so the UTC gap from the prior day is 23h, not 24h.
+        let rec = Recurrence::Daily {
+            minute_of_day: 9 * 60,
+            tz: "Europe/London".into(),
+        };
+        let sat = epoch("Europe/London", 2025, 3, 29, 9, 0);
+        let sun = epoch("Europe/London", 2025, 3, 30, 9, 0);
+        assert_eq!(rec.next_after(sat), sun);
+        assert_eq!(sun - sat, 23 * 3_600);
+    }
+
+    #[test]
+    fn weekly_cycles_through_its_weekdays() {
+        let rec = Recurrence::Weekly {
+            weekdays: vec![Weekday::Mon, Weekday::Wed, Weekday::Fri],
+            minute_of_day: 10 * 60,
+            tz: "America/New_York".into(),
+        };
+        // 2025-01-06 is a Monday.
+        let mon = epoch("America/New_York", 2025, 1, 6, 10, 0);
+        let wed = epoch("America/New_York", 2025, 1, 8, 10, 0);
+        let fri = epoch("America/New_York", 2025, 1, 10, 10, 0);
+        let next_mon = epoch("America/New_York", 2025, 1, 13, 10, 0);
+        assert_eq!(rec.next_after(mon), wed);
+        assert_eq!(rec.next_after(wed), fri);
+        assert_eq!(rec.next_after(fri), next_mon);
+    }
+
+    #[test]
+    fn monthly_clamps_to_the_last_day_of_short_months() {
+        let rec = Recurrence::Monthly {
+            day: 31,
+            minute_of_day: 9 * 60,
+            tz: "UTC".into(),
+        };
+        let jan31 = epoch("UTC", 2025, 1, 31, 9, 0);
+        let feb28 = epoch("UTC", 2025, 2, 28, 9, 0);
+        let mar31 = epoch("UTC", 2025, 3, 31, 9, 0);
+        assert_eq!(rec.next_after(jan31), feb28);
+        assert_eq!(rec.next_after(feb28), mar31);
+    }
+
+    #[test]
+    fn every_has_no_computed_first_fire() {
+        assert_eq!(Recurrence::Every { seconds: 60 }.first_on_or_after(0), None);
+    }
+
+    #[test]
+    fn calendar_recurrences_validate_their_fields() {
+        assert!(Recurrence::Daily {
+            minute_of_day: 540,
+            tz: "Europe/London".into()
+        }
+        .validate()
+        .is_ok());
+        assert!(Recurrence::Daily {
+            minute_of_day: 1_440,
+            tz: "UTC".into()
+        }
+        .validate()
+        .is_err());
+        assert!(Recurrence::Daily {
+            minute_of_day: 540,
+            tz: "Mars/Olympus".into()
+        }
+        .validate()
+        .is_err());
+        assert!(Recurrence::Weekly {
+            weekdays: vec![],
+            minute_of_day: 540,
+            tz: "UTC".into()
+        }
+        .validate()
+        .is_err());
+        assert!(Recurrence::Monthly {
+            day: 0,
+            minute_of_day: 540,
+            tz: "UTC".into()
+        }
+        .validate()
+        .is_err());
+        assert!(Recurrence::Monthly {
+            day: 32,
+            minute_of_day: 540,
+            tz: "UTC".into()
+        }
+        .validate()
+        .is_err());
+    }
+
+    #[test]
+    fn calendar_recurrence_round_trips_through_metadata_json() {
+        let rec = Recurrence::Weekly {
+            weekdays: vec![Weekday::Mon, Weekday::Fri],
+            minute_of_day: 8 * 60 + 30,
+            tz: "America/New_York".into(),
+        };
+        let meta = ScheduledMessageMeta::create(
+            1,
+            intent(),
+            rec.first_on_or_after(0).unwrap(),
+            Some(rec.clone()),
+            ContextPolicy::CurrentMemory,
+        )
+        .unwrap();
+        let parsed =
+            ScheduledMessageMeta::from_metadata_json(&meta.to_metadata_json().unwrap()).unwrap();
+        assert_eq!(parsed.recurrence, Some(rec));
     }
 }
