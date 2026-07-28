@@ -110,7 +110,22 @@ A turn may also delegate to a specialist sub-agent. The host is
 **specialist-agnostic**: it holds no specialist itself; products register a list
 of `SpecialistSpec`s (the `assistant-specialist-spec` vocab — plain data describing a
 specialist's route name, agent-graph identity, concurrency limits, custom image,
-and in-container turn config) via `SlackRunOptions.specialists`. When a run emits
+and in-container turn config) via `SlackRunOptions.specialists`. Beyond this
+compiled baseline, an **instance** may register additional specialists purely
+through config: each `[[specialists]]` entry in `config.toml` names a reviewed spec
+`bundle` (a serialized `SpecialistSpec` JSON artifact emitted by the specialist's
+own build, resolved under `<root>/specialists/` — the path must be relative and may
+not escape that directory) plus operational `overrides`. Overrides are
+capacity/pinning-only (`image_digest`, `max_specialists`, `max_concurrent_jobs`,
+`max_artifact_bytes`, `max_turns`); the security-bearing fields — `system_prompt`,
+`tools`, and `allowed_tools` — come from the reviewed bundle and are never
+hand-authored in TOML. The host resolves config entries
+(`assistant_config::resolve_specialists`) and appends them to the compiled baseline
+(`registered_specialists` in the serve path); a `route_name` that collides across
+the two sources is a hard error, since the route name is the delegate menu's enum
+value and must be unique. This lets a squad customise its assistant by plugging in
+specialists — a bundle plus a separately-published image — without forking or
+rebuilding the product binary. When a run emits
 a `delegate` action (only on the Slack inbound path, and only when the spec list
 is non-empty), the serve loop intercepts it *after* delivering the turn's other
 replies — so the orchestrator's acknowledgment posts first — and drives the

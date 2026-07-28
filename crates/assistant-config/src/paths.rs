@@ -111,6 +111,12 @@ impl InstanceLayout {
         self.root.join("logs")
     }
 
+    /// Root for config-referenced specialist bundle files. A `[[specialists]]`
+    /// entry's `bundle` path resolves under here (see [`crate::resolve_specialists`]).
+    pub fn specialists_dir(&self) -> PathBuf {
+        self.root.join("specialists")
+    }
+
     pub fn setup_dir(&self) -> PathBuf {
         self.root.join("setup")
     }

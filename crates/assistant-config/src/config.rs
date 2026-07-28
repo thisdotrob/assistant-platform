@@ -14,6 +14,10 @@ pub struct Config {
     pub modules: ModulesConfig,
     #[serde(default)]
     pub web: WebConfig,
+    /// Config-referenced specialists this instance registers on top of the
+    /// product's compiled baseline. See [`crate::resolve_specialists`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub specialists: Vec<crate::specialists::SpecialistEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +69,20 @@ pub enum ConfigError {
         value: String,
     },
     Path(PathError),
+    SpecialistBundleIo {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    SpecialistBundleParse {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+    SpecialistBundlePathEscape {
+        bundle: String,
+    },
+    SpecialistMissingImageRef {
+        bundle: String,
+    },
 }
 
 impl std::fmt::Display for ConfigError {
@@ -81,6 +99,18 @@ impl std::fmt::Display for ConfigError {
                 write!(f, "invalid value {value:?} for environment override {key}")
             }
             ConfigError::Path(source) => write!(f, "{source}"),
+            ConfigError::SpecialistBundleIo { path, source } => {
+                write!(f, "failed to read specialist bundle {}: {source}", path.display())
+            }
+            ConfigError::SpecialistBundleParse { path, source } => {
+                write!(f, "failed to parse specialist bundle {}: {source}", path.display())
+            }
+            ConfigError::SpecialistBundlePathEscape { bundle } => {
+                write!(f, "specialist bundle path {bundle:?} must be relative and stay under the specialists directory")
+            }
+            ConfigError::SpecialistMissingImageRef { bundle } => {
+                write!(f, "specialist bundle {bundle:?} names no image (need a repository plus a tag or digest)")
+            }
         }
     }
 }
@@ -200,6 +230,7 @@ mod tests {
                 enabled: vec!["assistant-core".to_string(), "assistant-session".to_string()],
             },
             web: WebConfig::default(),
+            specialists: Vec::new(),
         }
     }
 

@@ -16,6 +16,8 @@ use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use assistant_config::{home_dir, InstanceLayout};
+#[cfg(any(feature = "socket-mode", test))]
+use assistant_config::{resolve_specialists, SpecialistEntry};
 #[cfg(feature = "socket-mode")]
 use assistant_config::{apply_env_overlay, env_overlay_from_process, load_config};
 use assistant_runtime_docker::{base_image_ref, DockerCliRuntime};
@@ -291,11 +293,24 @@ fn run_slack_inner(opts: SlackRunOptions) -> Result<(), HostError> {
         None => config,
     };
 
+    // The registered set is the product's compiled baseline plus any the instance
+    // adds via `[[specialists]]` in config (each resolved from a reviewed bundle).
+    let mut config_toml =
+        load_config(&instance_layout.config_path()).map_err(|e| HostError::Layout(e.to_string()))?;
+    apply_env_overlay(&mut config_toml, &env_overlay_from_process())
+        .map_err(|e| HostError::Layout(e.to_string()))?;
+    let specialists = registered_specialists(
+        opts.specialists,
+        &config_toml.specialists,
+        &instance_layout.specialists_dir(),
+    )
+    .map_err(HostError::Layout)?;
+
     // The orchestrator container builds its dynamic `delegate` routing menu from
     // this: a JSON array of `{name, description}`, one per registered specialist.
     // `run_specialist_turn` overwrites `extra_env`, so a specialist never inherits
     // `ASSISTANT_SPECIALISTS` (and so cannot re-delegate from its own image).
-    let menu: Vec<_> = opts.specialists.iter().map(|s| s.menu_entry()).collect();
+    let menu: Vec<_> = specialists.iter().map(|s| s.menu_entry()).collect();
     let specialists_json = serde_json::to_string(&menu)
         .map_err(|e| HostError::Layout(format!("serializing the specialist menu failed: {e}")))?;
     config.extra_env = vec![("ASSISTANT_SPECIALISTS".to_string(), specialists_json)];
@@ -322,7 +337,7 @@ fn run_slack_inner(opts: SlackRunOptions) -> Result<(), HostError> {
         // The specialists this product registered. The orchestrator may delegate
         // to any of them by `route_name`; each runs in its own custom image as a
         // real Claude turn. Empty disables delegation.
-        specialists: opts.specialists,
+        specialists,
     };
     // Run until the process is signalled (Ctrl-C / SIGTERM). The handler flips an
     // atomic that this stop predicate reads; the serve loop notices within one
@@ -512,6 +527,41 @@ fn is_recoverable(err: &HostError) -> bool {
     matches!(err, HostError::ContainerDied { .. } | HostError::Timeout { .. })
 }
 
+/// Build the full registered specialist set: the product's `compiled` baseline
+/// first, then the instance's config-referenced bundles appended, rejecting a
+/// duplicate `route_name` across the two sources. This is the exact set the
+/// serve loop hands the orchestrator as the `delegate` menu.
+#[cfg(any(feature = "socket-mode", test))]
+fn registered_specialists(
+    compiled: Vec<SpecialistSpec>,
+    entries: &[SpecialistEntry],
+    specialists_dir: &std::path::Path,
+) -> Result<Vec<SpecialistSpec>, String> {
+    let mut specialists = compiled;
+    let from_config = resolve_specialists(entries, specialists_dir).map_err(|e| e.to_string())?;
+    specialists.extend(from_config);
+    reject_duplicate_route_names(&specialists)?;
+    Ok(specialists)
+}
+
+/// A `route_name` is the `delegate` tool's enum value, so it must be unique
+/// across all registered specialists; a collision (e.g. a config bundle reusing
+/// a compiled specialist's name) would silently shadow one entry in the menu.
+/// Reject it up front with the offending name.
+#[cfg(any(feature = "socket-mode", test))]
+fn reject_duplicate_route_names(specialists: &[SpecialistSpec]) -> Result<(), String> {
+    let mut seen = std::collections::HashSet::new();
+    for spec in specialists {
+        if !seen.insert(spec.route_name.as_str()) {
+            return Err(format!(
+                "duplicate specialist route_name {:?} (each must be unique across compiled and config-registered specialists)",
+                spec.route_name
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,5 +579,79 @@ mod tests {
         assert!(!is_recoverable(&HostError::Session(SessionError::InvalidId(
             "x".to_string()
         ))));
+    }
+
+    fn spec(route: &str) -> SpecialistSpec {
+        SpecialistSpec {
+            route_name: route.to_string(),
+            description: String::new(),
+            profile_id: format!("{route}-specialist"),
+            profile_version: "0.1.0".to_string(),
+            group_slug: format!("{route}-1"),
+            image_repository: "r".to_string(),
+            image_tag: "0.1.0".to_string(),
+            image_digest: None,
+            max_specialists: 1,
+            max_concurrent_jobs: 1,
+            max_artifact_bytes: 1,
+            system_prompt: String::new(),
+            tools: vec![],
+            allowed_tools: vec![],
+            max_turns: 1,
+            extra_env: vec![],
+        }
+    }
+
+    #[test]
+    fn unique_route_names_pass_duplicates_fail() {
+        assert!(reject_duplicate_route_names(&[spec("browser"), spec("calendar")]).is_ok());
+        let err = reject_duplicate_route_names(&[spec("browser"), spec("browser")]).unwrap_err();
+        assert!(err.contains("browser"));
+    }
+
+    fn write_bundle(dir: &std::path::Path, name: &str, spec: &SpecialistSpec) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(name), serde_json::to_string(spec).unwrap()).unwrap();
+    }
+
+    fn entry(bundle: &str) -> SpecialistEntry {
+        SpecialistEntry {
+            bundle: std::path::PathBuf::from(bundle),
+            enabled: true,
+            overrides: assistant_config::SpecialistOverrides::default(),
+        }
+    }
+
+    #[test]
+    fn config_specialist_is_appended_to_the_compiled_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        write_bundle(dir.path(), "research.json", &spec("research"));
+        let merged =
+            registered_specialists(vec![spec("browser")], &[entry("research.json")], dir.path())
+                .unwrap();
+        let names: Vec<_> = merged.iter().map(|s| s.route_name.as_str()).collect();
+        assert_eq!(names, vec!["browser", "research"]);
+    }
+
+    #[test]
+    fn config_reusing_a_compiled_route_name_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        write_bundle(dir.path(), "dupe.json", &spec("browser"));
+        let err =
+            registered_specialists(vec![spec("browser")], &[entry("dupe.json")], dir.path())
+                .unwrap_err();
+        assert!(err.contains("browser"));
+    }
+
+    #[test]
+    fn a_bundle_without_an_image_fails_registration() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut broken = spec("research");
+        broken.image_repository = String::new();
+        write_bundle(dir.path(), "broken.json", &broken);
+        assert!(
+            registered_specialists(vec![spec("browser")], &[entry("broken.json")], dir.path())
+                .is_err()
+        );
     }
 }

@@ -29,6 +29,7 @@ fn sample_config() -> Config {
             enabled: vec!["assistant-core".to_string()],
         },
         web: WebConfig::default(),
+        specialists: Vec::new(),
     }
 }
 

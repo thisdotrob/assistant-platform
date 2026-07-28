@@ -123,6 +123,7 @@ fn build_bootstrap_input(request: &BootstrapRequest) -> Result<BootstrapInput, S
             enabled: request.enabled_modules.clone(),
         },
         web: WebConfig::default(),
+        specialists: Vec::new(),
     };
 
     let home = match request.home.clone().or_else(assistant_config::home_dir) {
