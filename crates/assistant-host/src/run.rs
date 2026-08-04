@@ -326,6 +326,17 @@ where
                 &self.config.onecli_ca_dir,
                 &self.config.onecli_agent,
             )?;
+            // OneCLI's container-config always includes ANTHROPIC_API_KEY=placeholder
+            // so containers can authenticate via API key through the proxy. However on
+            // the OAuth path (ClaudeOAuth / Specialist), prepare_runner_env already
+            // cleared ANTHROPIC_API_KEY so Claude Code uses CLAUDE_CODE_OAUTH_TOKEN
+            // (Authorization: Bearer) instead of the API key path (x-api-key). Since
+            // apply_gateway_config appends AFTER prepare_runner_env, the placeholder
+            // value wins and Claude Code falls back to API key mode, which the proxy
+            // cannot satisfy with an OAuth token. Re-clear it here so the OAuth path
+            // stays authoritative.
+            spec.env.retain(|(k, _)| k != "ANTHROPIC_API_KEY");
+            spec.env.push(("ANTHROPIC_API_KEY".to_string(), String::new()));
         }
         // Caller-supplied env (e.g. the specialist's network policy) is appended
         // last so it travels into the container alongside the auth/gateway env.
