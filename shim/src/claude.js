@@ -129,6 +129,14 @@ function describeSchedule(args) {
 // present it is prepended as a context preamble ahead of the user's message,
 // mirroring the v1 pre-reply RAG layout (stored context first, then the turn).
 //
+// `messages` is the prior conversation history as an Anthropic messages array
+// `[{role, content}]`, built from the session DBs by `Session.buildHistory()`.
+// The Agent SDK's `query()` takes only `prompt` + `options` — it has no
+// messages/history input short of full session resumption — so we deliver the
+// history by formatting it into the prompt as a labelled transcript ahead of the
+// current message (same approach as the `memory` preamble). When absent (first
+// turn or history unavailable) the turn runs without prior context.
+//
 // Returns `{ text, scheduled, cancellations, pauses, resumes, memories,
 // delegations }`: the assistant's final text, a list of
 // `{ text, after_seconds?, every_seconds?, calendar? }` schedule requests, lists of
@@ -136,8 +144,32 @@ function describeSchedule(args) {
 // `{ content, title? }` memory-save requests, and a list of
 // `{ specialist, goal, facts?, constraints? }` delegation requests, all collected
 // from tool calls during the turn.
-export async function runClaudeTurn(userText, memory) {
-  const prompt = memory && memory.length > 0 ? `${memory}\n\n${userText}` : userText;
+// Format prior turns as a plain-text transcript for the prompt. `messages` is
+// `[{role, content}]` from buildHistory(); user turns are labelled "User:" and
+// assistant turns "You:" (the model is the assistant). Returns '' for empty
+// history so the caller can omit the block entirely.
+export function formatHistory(messages) {
+  if (!messages || messages.length === 0) return '';
+  const lines = messages.map(({ role, content }) => {
+    const label = role === 'assistant' ? 'You' : 'User';
+    return `${label}: ${content}`;
+  });
+  return lines.join('\n\n');
+}
+
+export async function runClaudeTurn(userText, memory, messages) {
+  const transcript = formatHistory(messages);
+  const parts = [];
+  if (memory && memory.length > 0) parts.push(memory);
+  if (transcript.length > 0) {
+    parts.push(
+      `Here is the conversation so far, for context:\n\n${transcript}`,
+      `The user's new message is:\n\n${userText}`,
+    );
+  } else {
+    parts.push(userText);
+  }
+  const prompt = parts.join('\n\n');
 
   const specialists = specialistsFromEnv(process.env);
   const hasSpecialists = specialists.length > 0;

@@ -15,7 +15,8 @@ use assistant_runtime_docker::{
     FakeRuntime, ImageRef, LifecyclePolicy, OneCliReadiness, RunnerAuthMode,
 };
 use assistant_session::{
-    init_session, session_exists, verify_sequence_parity, LocalControl, SessionLayout,
+    current_outbound_compat, init_session, read_outbound, session_exists, verify_sequence_parity,
+    LocalControl, SessionLayout,
 };
 
 fn ready() -> OneCliReadiness {
@@ -61,7 +62,9 @@ fn spawn_fake_shim(layout: SessionLayout, stop: Arc<AtomicBool>) -> JoinHandle<(
                     // transient SQLite lock blip over the bind mount must be
                     // retried on the next tick, not silently dropped. (The real
                     // shim must observe the same exactly-once-on-success rule.)
-                    if fake.emit("text", &format!("echo: {content}")).is_ok() {
+                    // Stamp the reply with its in_seq so the host's per-turn
+                    // filter (run_turn_keyed) recognises it as this turn's reply.
+                    if fake.emit_reply(seq, "text", &format!("echo: {content}")).is_ok() {
                         handled.insert(seq);
                     }
                 }
@@ -469,20 +472,36 @@ fn dead_container_is_reaped_and_host_recovers_on_next_turn() {
     assert_eq!(host.runtime().stopped.len(), 1, "the dead container was reaped");
 
     // Turn 2: a live shim now backs the session. The next turn must spawn a
-    // fresh container (not reuse the reaped one) and deliver a reply, including
-    // the message orphaned by the dead turn.
+    // fresh container (not reuse the reaped one) and deliver its own reply. The
+    // inbound orphaned by the dead turn is still *processed* by the fresh
+    // container (a reply row is committed, so the session stays complete), but it
+    // is NOT returned in this turn's output: `run_turn_keyed` returns only the
+    // replies whose `in_seq` matches the current turn, since a backlog reply's
+    // original Slack thread context is unavailable (see run.rs). The watermark
+    // advances over the orphan so it is never re-delivered on a later turn.
     let stop = Arc::new(AtomicBool::new(false));
     let shim = spawn_fake_shim(layout.clone(), stop.clone());
 
     let mut out2: Vec<u8> = Vec::new();
     let delivered = host.process_turn("second", &mut out2).unwrap();
 
-    assert!(delivered >= 1);
     let rendered = String::from_utf8(out2).unwrap();
-    // The inbound enqueued by the dead turn is picked up by the fresh container.
-    assert!(rendered.contains("echo: first"), "orphaned message not recovered: {rendered:?}");
+    assert_eq!(delivered, 1, "only the current turn's reply is delivered");
+    assert_eq!(rendered, "echo: second\n");
+    assert!(
+        !rendered.contains("echo: first"),
+        "orphaned reply must not be delivered in the current turn's thread: {rendered:?}"
+    );
     assert_eq!(host.runtime().spawned.len(), 2, "a new container was spawned after death");
     verify_sequence_parity(&layout).unwrap();
+
+    // The orphan was still consumed, not lost: the fresh container committed a
+    // reply for it to the outbound DB (it simply wasn't returned in-band above).
+    let outbound = read_outbound(&layout, current_outbound_compat()).unwrap();
+    assert!(
+        outbound.iter().any(|m| m.content == "echo: first"),
+        "orphaned inbound should still have been processed into a reply row"
+    );
 
     host.shutdown().unwrap();
     stop.store(true, Ordering::Relaxed);

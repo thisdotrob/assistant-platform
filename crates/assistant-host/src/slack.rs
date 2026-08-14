@@ -356,10 +356,18 @@ fn handle_event<A, R, F>(
         return;
     }
 
+    // Compute the thread root before building the inbound message: it's needed
+    // both as the `thread_id` stored on the inbound row (so the container can
+    // filter history to this thread) and as the delivery `thread_root_id`.
+    let thread_root = event
+        .thread_root_id
+        .clone()
+        .unwrap_or_else(|| event.platform_message_id.clone());
     let inbound = InboundMessage {
         sender: event.sender_id.clone(),
         content: event.text.clone(),
         metadata: None,
+        thread_id: Some(thread_root.clone()),
     };
     // Hold the hosts borrow only for the turn; the owned replies outlive it, so
     // delivery (which never touches `hosts`) runs after the borrow is released.
@@ -377,14 +385,6 @@ fn handle_event<A, R, F>(
             }
         }
     };
-
-    // Thread the reply under the triggering message's root — its own ts when the
-    // trigger was top-level — so a channel stays uncluttered and a threaded ask
-    // gets a threaded answer.
-    let thread_root = event
-        .thread_root_id
-        .clone()
-        .unwrap_or_else(|| event.platform_message_id.clone());
     let target = DeliveryTarget {
         chat_id: event.chat_id.clone(),
         thread_root_id: Some(thread_root),
@@ -611,6 +611,7 @@ fn finish_one_delegation<A, R, F>(
         sender: "specialist".to_string(),
         content: reinjected,
         metadata: None,
+        thread_id: None,
     };
     let replies = {
         let mut map = hosts.borrow_mut();
@@ -787,6 +788,7 @@ fn scheduler_tick<A, R, F>(
             sender: "scheduler".to_string(),
             content: item.intent.clone(),
             metadata: None,
+            thread_id: None,
         };
         let replies = {
             let mut map = hosts.borrow_mut();

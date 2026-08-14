@@ -330,6 +330,7 @@ where
         sender: ORCHESTRATOR_GROUP.to_string(),
         content: specialist_inbound(packet),
         metadata: None,
+        thread_id: None,
     };
 
     let mut host = Host::new(layout, runtime_factory(), config);

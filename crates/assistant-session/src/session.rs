@@ -29,6 +29,11 @@ pub struct InboundMessage {
     pub content: String,
     #[serde(default)]
     pub metadata: Option<String>,
+    /// Slack thread root TS (or equivalent per-channel thread id). `None` for
+    /// channels with no thread concept (CLI). Stored on inbound rows so the
+    /// container can filter conversation history to the current thread.
+    #[serde(default)]
+    pub thread_id: Option<String>,
 }
 
 /// A message the container emitted, read back by the host.
@@ -40,6 +45,11 @@ pub struct OutboundMessage {
     #[serde(default)]
     pub metadata: Option<String>,
     pub created_at: String,
+    /// The inbound seq this message was emitted for. Written by the shim's
+    /// `emitBatch` alongside the `processing_ack` claim (schema v3+). `None`
+    /// for rows written by an older shim or before the v3 migration ran.
+    #[serde(default)]
+    pub in_seq: Option<i64>,
 }
 
 /// A destination row projected into the inbound DB before container wake.
@@ -150,14 +160,15 @@ pub fn enqueue_inbound_keyed(
     let seq = next_seq(&conn, "messages_in", false)?;
     let tx = conn.transaction()?;
     tx.execute(
-        "INSERT INTO messages_in (seq, sender, content, metadata, idempotency_key, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
+        "INSERT INTO messages_in (seq, sender, content, metadata, idempotency_key, thread_id, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
         rusqlite::params![
             seq,
             message.sender,
             message.content,
             message.metadata,
-            idempotency_key
+            idempotency_key,
+            message.thread_id,
         ],
     )?;
     tx.commit()?;
@@ -217,7 +228,7 @@ pub fn read_outbound(
 ) -> Result<Vec<OutboundMessage>, SessionError> {
     let conn = open_outbound_read(layout, compat)?;
     let mut stmt = conn.prepare(
-        "SELECT seq, kind, content, metadata, created_at FROM messages_out ORDER BY seq",
+        "SELECT seq, kind, content, metadata, created_at, in_seq FROM messages_out ORDER BY seq",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(OutboundMessage {
@@ -226,6 +237,7 @@ pub fn read_outbound(
             content: row.get(2)?,
             metadata: row.get(3)?,
             created_at: row.get(4)?,
+            in_seq: row.get(5)?,
         })
     })?;
     let mut out = Vec::new();
@@ -233,6 +245,18 @@ pub fn read_outbound(
         out.push(row?);
     }
     Ok(out)
+}
+
+/// Migrate an existing session's DBs to the current schema without reinitializing
+/// state. Used by the host when a session already exists but may be behind the
+/// current schema version (e.g. after an assistant-platform upgrade).
+pub fn migrate_session(layout: &SessionLayout) -> Result<(), SessionError> {
+    let mut inbound = open_read_write(&layout.inbound_db_path())?;
+    lazy_migrate(&mut inbound, DbKind::Inbound, &inbound_migrations())?;
+
+    let mut outbound = open_read_write(&layout.outbound_db_path())?;
+    lazy_migrate(&mut outbound, DbKind::Outbound, &outbound_migrations())?;
+    Ok(())
 }
 
 /// Mark an outbound sequence as delivered to its channel (recorded in inbound).

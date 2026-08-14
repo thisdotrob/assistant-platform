@@ -13,9 +13,9 @@ use crate::layout::DbKind;
 use crate::migrate::SessionMigration;
 
 /// Highest inbound schema version the current build ships.
-pub const CURRENT_INBOUND_VERSION: u32 = 3;
+pub const CURRENT_INBOUND_VERSION: u32 = 4;
 /// Highest outbound schema version the current build ships.
-pub const CURRENT_OUTBOUND_VERSION: u32 = 2;
+pub const CURRENT_OUTBOUND_VERSION: u32 = 3;
 
 const INBOUND_V1: &str = "\
 CREATE TABLE messages_in (
@@ -52,6 +52,12 @@ const INBOUND_V3: &str = "\
 ALTER TABLE messages_in ADD COLUMN idempotency_key TEXT;
 CREATE UNIQUE INDEX idx_messages_in_idempotency_key ON messages_in (idempotency_key);";
 
+// Slack thread root TS (or equivalent per-channel thread id) for the inbound
+// row. Stored so the container can filter conversation history to the current
+// thread when building the Anthropic messages array. NULL for channels with no
+// thread concept (CLI) and for rows written before this migration.
+const INBOUND_V4: &str = "ALTER TABLE messages_in ADD COLUMN thread_id TEXT;";
+
 const OUTBOUND_V1: &str = "\
 CREATE TABLE messages_out (
     seq        INTEGER PRIMARY KEY,
@@ -79,6 +85,13 @@ CREATE TABLE container_state (
 
 const OUTBOUND_V2: &str = "ALTER TABLE messages_out ADD COLUMN edited_at TEXT;";
 
+// Links each outbound batch to the inbound seq it was emitted for. Written by
+// the shim's `emitBatch` alongside the `processing_ack` claim so the host can
+// attribute replies to the correct triggering inbound — critical for correct
+// Slack thread delivery when a container processes backlogged inbound alongside
+// the triggering message after a host restart.
+const OUTBOUND_V3: &str = "ALTER TABLE messages_out ADD COLUMN in_seq INTEGER;";
+
 pub fn inbound_migrations() -> Vec<SessionMigration> {
     vec![
         SessionMigration {
@@ -99,6 +112,12 @@ pub fn inbound_migrations() -> Vec<SessionMigration> {
             name: "inbound_message_idempotency_key",
             sql: INBOUND_V3,
         },
+        SessionMigration {
+            db_kind: DbKind::Inbound,
+            version: 4,
+            name: "inbound_message_thread_id",
+            sql: INBOUND_V4,
+        },
     ]
 }
 
@@ -115,6 +134,12 @@ pub fn outbound_migrations() -> Vec<SessionMigration> {
             version: 2,
             name: "outbound_message_edited_at",
             sql: OUTBOUND_V2,
+        },
+        SessionMigration {
+            db_kind: DbKind::Outbound,
+            version: 3,
+            name: "outbound_message_in_seq",
+            sql: OUTBOUND_V3,
         },
     ]
 }

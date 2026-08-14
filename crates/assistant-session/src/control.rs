@@ -86,6 +86,40 @@ impl FakeContainer {
         Ok(seq)
     }
 
+    /// Emit an outbound reply stamped with the `in_seq` of the inbound turn it
+    /// answers, mirroring the real runner's `emitBatch` (session.js): every reply
+    /// a turn produces carries its originating inbound seq so the host can return
+    /// only the replies belonging to the turn it is awaiting (`run_turn_keyed`
+    /// filters on `in_seq`). The plain [`emit`](Self::emit) leaves `in_seq` NULL
+    /// and is only for lower-level cases that never drive a host turn.
+    pub fn emit_reply(
+        &self,
+        in_seq: i64,
+        kind: &str,
+        content: &str,
+    ) -> Result<i64, SessionError> {
+        let mut conn = open_read_write(&self.layout.outbound_db_path())?;
+        let found = schema_version(&conn)?;
+        check_runner_compatibility(DbKind::Outbound, found, self.compat)?;
+
+        let max: Option<i64> = conn
+            .query_row("SELECT MAX(seq) FROM messages_out", [], |r| r.get(0))
+            .optional()?
+            .flatten();
+        let seq = match max {
+            None => 1,
+            Some(m) => m + 2,
+        };
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO messages_out (seq, kind, content, metadata, in_seq, created_at)
+             VALUES (?1, ?2, ?3, NULL, ?4, datetime('now'))",
+            rusqlite::params![seq, kind, content, in_seq],
+        )?;
+        tx.commit()?;
+        Ok(seq)
+    }
+
     /// Record a `processing_ack` claim for an inbound sequence.
     pub fn claim(&self, in_seq: i64, claimed_by: &str) -> Result<(), SessionError> {
         let conn = open_read_write(&self.layout.outbound_db_path())?;

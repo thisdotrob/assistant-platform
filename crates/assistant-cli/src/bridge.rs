@@ -193,7 +193,7 @@ impl BridgeTransport for SessionBridge<'_> {
         .ok();
         enqueue_inbound(
             self.layout,
-            &InboundMessage { sender: BRIDGE_SENDER.to_string(), content, metadata },
+            &InboundMessage { sender: BRIDGE_SENDER.to_string(), content, metadata, thread_id: None },
         )?;
         mark_delivered(self.layout, response.in_reply_to)?;
         if response.in_reply_to > self.high_water {

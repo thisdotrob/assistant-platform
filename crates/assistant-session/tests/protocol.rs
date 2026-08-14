@@ -33,6 +33,7 @@ fn host_enqueues_inbound_and_reads_outbound_from_fake_writer() {
             sender: "local-cli".to_string(),
             content: "hello".to_string(),
             metadata: None,
+            thread_id: None,
         },
     )
     .unwrap();
@@ -72,6 +73,7 @@ fn upsert_inbound_meta_rewrites_one_keyed_row_in_place() {
             sender: "schedule-meta".to_string(),
             content: "stretch".to_string(),
             metadata: Some("{\"status\":\"active\"}".to_string()),
+            thread_id: None,
         },
     )
     .unwrap();
@@ -86,6 +88,7 @@ fn upsert_inbound_meta_rewrites_one_keyed_row_in_place() {
             sender: "schedule-meta".to_string(),
             content: "stretch".to_string(),
             metadata: Some("{\"status\":\"paused\"}".to_string()),
+            thread_id: None,
         },
     )
     .unwrap();
@@ -113,6 +116,7 @@ fn upsert_inbound_meta_rewrites_one_keyed_row_in_place() {
             sender: "schedule-meta".to_string(),
             content: "walk".to_string(),
             metadata: Some("{\"status\":\"active\"}".to_string()),
+            thread_id: None,
         },
     )
     .unwrap();
@@ -131,6 +135,7 @@ fn second_host_inbound_message_uses_next_even_seq() {
         sender: "local-cli".to_string(),
         content: c.to_string(),
         metadata: None,
+        thread_id: None,
     };
     let a = enqueue_inbound(control.layout(), &msg("a")).unwrap();
     let b = enqueue_inbound(control.layout(), &msg("b")).unwrap();
@@ -147,6 +152,7 @@ fn keyed_inbound_enqueue_is_idempotent_on_retry() {
         sender: "scheduler".to_string(),
         content: c.to_string(),
         metadata: None,
+        thread_id: None,
     };
 
     // A scheduler firing keyed on the occurrence: the first attempt writes the
@@ -204,6 +210,7 @@ fn stale_ack_cleanup_only_under_stopped_lock() {
             sender: "local-cli".to_string(),
             content: "do work".to_string(),
             metadata: None,
+            thread_id: None,
         },
     )
     .unwrap();

@@ -176,6 +176,7 @@ pub fn run_echo_turn(sl: &SessionLayout, sender: &str, text: &str) -> Vec<Outbou
             sender: sender.to_string(),
             content: text.to_string(),
             metadata: None,
+            thread_id: None,
         },
     )
     .unwrap();

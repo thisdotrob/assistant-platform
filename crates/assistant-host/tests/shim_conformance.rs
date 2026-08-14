@@ -123,6 +123,7 @@ fn real_node_shim_round_trips_a_turn_carrying_injected_metadata() {
         sender: "local".to_string(),
         content: "hello".to_string(),
         metadata: Some("<retrieved_memories>\nmem-x\n</retrieved_memories>".to_string()),
+        thread_id: None,
     };
     let replies = host.run_turn(&inbound).unwrap();
 

@@ -16,7 +16,7 @@ pub const BASE_IMAGE_REPOSITORY: &str = "ghcr.io/thisdotrob/assistant-base";
 /// pulls. Bumped on every base-image republish (see the platform release
 /// runbook). `None` falls back to the `repository:tag` reference.
 pub const BASE_IMAGE_DIGEST: Option<&str> =
-    Some("sha256:fd5d9cec9b4f760b56344658205583d6e5dc126c2058810283c5e22842271f4f");
+    Some("sha256:0539be90fda1e4e2544ea87317411e5b57e20fba03876eb41899ce331e9fe38d");
 
 /// The base runtime the Claude Agent SDK runs inside, confirmed by the
 /// 2026-06-01 auth spike.

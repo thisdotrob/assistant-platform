@@ -209,6 +209,7 @@ pub fn deliver_handoff(
         sender: sender.to_string(),
         content: handoff.to_json()?,
         metadata: Some(serde_json::to_string(&envelope)?),
+        thread_id: None,
     };
     Ok(enqueue_inbound(specialist_layout, &message)?)
 }
@@ -239,6 +240,7 @@ pub fn deliver_result(
         sender: sender.to_string(),
         content: result.to_json()?,
         metadata: Some(serde_json::to_string(&envelope)?),
+        thread_id: None,
     };
     Ok(enqueue_inbound(orchestrator_layout, &message)?)
 }

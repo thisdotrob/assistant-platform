@@ -24,8 +24,8 @@ use assistant_runtime_docker::{
 };
 use assistant_session::{
     current_outbound_compat, enqueue_inbound_keyed, init_session, mark_delivered,
-    max_delivered_seq, read_outbound, session_exists, InboundMessage, OutboundMessage,
-    SessionError, SessionLayout, CURRENT_OUTBOUND_VERSION,
+    max_delivered_seq, migrate_session, read_outbound, session_exists, InboundMessage,
+    OutboundMessage, SessionError, SessionLayout, CURRENT_OUTBOUND_VERSION,
 };
 
 use crate::error::HostError;
@@ -238,6 +238,11 @@ where
             // `container_state`; `max_delivered_seq` is a pure read).
             if !session_exists(&self.layout) {
                 retry_transient(|| init_session(&self.layout))?;
+            } else {
+                // Existing session: run any pending schema migrations without
+                // resetting container_state. This brings an existing session's DBs
+                // up to the current schema version (e.g. the v3 `in_seq` column).
+                retry_transient(|| migrate_session(&self.layout))?;
             }
             self.last_delivered_seq = retry_transient(|| max_delivered_seq(&self.layout))?;
             self.started = true;
@@ -502,7 +507,8 @@ where
             None => inbound,
         };
 
-        retry_transient(|| enqueue_inbound_keyed(&self.layout, inbound, idempotency_key))?;
+        let in_seq =
+            retry_transient(|| enqueue_inbound_keyed(&self.layout, inbound, idempotency_key))?;
         self.ensure_spawned()?;
 
         let started = Instant::now();
@@ -534,11 +540,26 @@ where
                 .filter(|m| m.seq > self.last_delivered_seq)
                 .collect();
             if !new.is_empty() {
+                // Advance the watermark for ALL new messages, including those
+                // from backlogged inbound the container processes before ours
+                // (possible after a host restart with pending unacked messages).
+                // This prevents them from being re-delivered on the next call.
                 for message in &new {
                     retry_transient(|| mark_delivered(&self.layout, message.seq))?;
                     self.last_delivered_seq = self.last_delivered_seq.max(message.seq);
                 }
-                return Ok(new);
+                // Return only the messages that belong to our specific inbound
+                // turn (identified by in_seq). Backlog replies — from inbound
+                // that arrived before the current Slack event but were unacked
+                // when the host restarted — are consumed above but not returned,
+                // since their original Slack thread context is unavailable.
+                let mine: Vec<OutboundMessage> =
+                    new.into_iter().filter(|m| m.in_seq == Some(in_seq)).collect();
+                if !mine.is_empty() {
+                    return Ok(mine);
+                }
+                // Backlog was processed but our turn has not run yet; continue
+                // polling until the container reaches our in_seq.
             }
 
             if started.elapsed() >= self.config.turn_timeout {
@@ -558,6 +579,7 @@ where
             sender: local_sender(),
             content: line.trim_end_matches(['\n', '\r']).to_string(),
             metadata: None,
+            thread_id: None,
         };
         let delivered = self.run_turn(&inbound)?;
         for message in &delivered {

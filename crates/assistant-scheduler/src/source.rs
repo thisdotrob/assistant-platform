@@ -88,6 +88,7 @@ pub fn write_meta(layout: &SessionLayout, meta: &ScheduledMessageMeta) -> Result
             sender: SCHEDULE_META_SENDER.to_string(),
             content: meta.intent.summary.clone(),
             metadata: Some(metadata.clone()),
+            thread_id: None,
         };
         upsert_inbound_meta(layout, &key, &message)?;
         Ok(())

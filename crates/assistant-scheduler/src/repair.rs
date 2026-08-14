@@ -191,6 +191,7 @@ mod tests {
                 sender: "host".into(),
                 content: m.intent.summary.clone(),
                 metadata: Some(m.to_metadata_json().unwrap()),
+                thread_id: None,
             },
         )
         .unwrap();
@@ -209,13 +210,14 @@ mod tests {
                 sender: "user".into(),
                 content: "hi".into(),
                 metadata: Some("{\"foo\":1}".into()),
+                thread_id: None,
             },
         )
         .unwrap();
         // And one with no metadata at all.
         enqueue_inbound(
             &layout,
-            &InboundMessage { sender: "user".into(), content: "yo".into(), metadata: None },
+            &InboundMessage { sender: "user".into(), content: "yo".into(), metadata: None, thread_id: None },
         )
         .unwrap();
 

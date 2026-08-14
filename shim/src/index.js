@@ -36,7 +36,7 @@ function sleep(ms) {
 async function buildResponder() {
   if (MODE === 'claude_oauth') {
     const { runClaudeTurn } = await import('./claude.js');
-    return (content, memory) => runClaudeTurn(content, memory);
+    return (content, memory, messages) => runClaudeTurn(content, memory, messages);
   }
   if (MODE === 'specialist') {
     const { runSpecialistTurn } = await import('./specialist.js');
@@ -93,7 +93,7 @@ async function main() {
       console.error(`read_inbound failed: ${err.message}`);
     }
 
-    for (const { seq, sender, content, metadata } of inbound) {
+    for (const { seq, sender, content, metadata, threadId } of inbound) {
       if (handled.has(seq)) continue;
 
       // Scheduling source-of-truth rows are host-written durable state, not
@@ -113,9 +113,16 @@ async function main() {
       // host reap the container before the later turns run.
       session.heartbeat();
 
+      let history = [];
+      try {
+        history = await session.buildHistory(seq, threadId);
+      } catch (err) {
+        console.error(`build_history for seq ${seq} failed: ${err.message}`);
+      }
+
       let result;
       try {
-        result = await respond(content, metadata);
+        result = await respond(content, metadata, history);
       } catch (err) {
         // Surface the failure as the turn's reply so the host doesn't hang
         // waiting for a row that will never come.

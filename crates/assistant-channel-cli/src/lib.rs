@@ -105,6 +105,7 @@ impl CliChannel {
                 sender: local_sender(),
                 content: raw.trim_end_matches(['\n', '\r']).to_string(),
                 metadata: None,
+                thread_id: None,
             },
         }
     }
@@ -273,6 +274,7 @@ mod tests {
             content: "Title / body".to_string(),
             metadata: None,
             created_at: "now".to_string(),
+            in_seq: None,
         };
         assert_eq!(render_message(&msg), "[card] Title / body");
     }

@@ -162,7 +162,7 @@ fn spawn_fake_shim(layout: SessionLayout, stop: Arc<AtomicBool>) -> JoinHandle<(
                         continue;
                     }
                     fake.claim(seq, "fake-shim").ok();
-                    if fake.emit("text", &format!("echo: {content}")).is_ok() {
+                    if fake.emit_reply(seq,"text", &format!("echo: {content}")).is_ok() {
                         handled.insert(seq);
                     }
                 }
@@ -193,7 +193,7 @@ fn spawn_scheduling_shim(
                         continue;
                     }
                     fake.claim(seq, "fake-shim").ok();
-                    if fake.emit("schedule_message", &payload).is_ok() {
+                    if fake.emit_reply(seq,"schedule_message", &payload).is_ok() {
                         handled.insert(seq);
                     }
                 }
@@ -224,7 +224,7 @@ fn spawn_cancel_shim(
                         continue;
                     }
                     fake.claim(seq, "fake-shim").ok();
-                    if fake.emit("cancel_schedule", &payload).is_ok() {
+                    if fake.emit_reply(seq,"cancel_schedule", &payload).is_ok() {
                         handled.insert(seq);
                     }
                 }
@@ -256,7 +256,7 @@ fn spawn_action_shim(
                         continue;
                     }
                     fake.claim(seq, "fake-shim").ok();
-                    if fake.emit(kind, &payload).is_ok() {
+                    if fake.emit_reply(seq,kind, &payload).is_ok() {
                         handled.insert(seq);
                     }
                 }
@@ -290,9 +290,9 @@ fn spawn_memory_shim(
                     }
                     fake.claim(seq, "fake-shim").ok();
                     let emitted = if saved {
-                        fake.emit("text", &format!("echo: {content}"))
+                        fake.emit_reply(seq,"text", &format!("echo: {content}"))
                     } else {
-                        fake.emit("save_memory", &payload)
+                        fake.emit_reply(seq,"save_memory", &payload)
                     };
                     if emitted.is_ok() {
                         handled.insert(seq);
@@ -330,9 +330,9 @@ fn spawn_delegating_shim(
                     }
                     fake.claim(seq, "fake-shim").ok();
                     let emitted = if delegated {
-                        fake.emit("text", &format!("echo: {content}"))
+                        fake.emit_reply(seq,"text", &format!("echo: {content}"))
                     } else {
-                        fake.emit("delegate", &payload)
+                        fake.emit_reply(seq,"delegate", &payload)
                     };
                     if emitted.is_ok() {
                         handled.insert(seq);
@@ -390,7 +390,7 @@ fn spawn_specialist_watcher(
                             continue;
                         }
                         fake.claim(seq, "fake-specialist").ok();
-                        if fake.emit("text", &format!("specialist did: {content}")).is_ok() {
+                        if fake.emit_reply(seq,"text", &format!("specialist did: {content}")).is_ok() {
                             handled.insert(seq);
                         }
                     }
@@ -452,7 +452,7 @@ fn spawn_gated_specialist_watcher(
                             continue;
                         }
                         fake.claim(seq, "fake-specialist").ok();
-                        if fake.emit("text", &format!("specialist did: {content}")).is_ok() {
+                        if fake.emit_reply(seq,"text", &format!("specialist did: {content}")).is_ok() {
                             handled.insert(seq);
                         }
                     }
@@ -490,9 +490,9 @@ fn spawn_multi_delegating_shim(
                     }
                     fake.claim(seq, "fake-shim").ok();
                     let emitted = if content.contains("A delegated sub-task finished") {
-                        fake.emit("text", &format!("echo: {content}"))
+                        fake.emit_reply(seq,"text", &format!("echo: {content}"))
                     } else {
-                        fake.emit("delegate", &payload)
+                        fake.emit_reply(seq,"delegate", &payload)
                     };
                     if emitted.is_ok() {
                         handled.insert(seq);
@@ -569,7 +569,7 @@ fn spawn_concurrency_watcher(
                             continue;
                         }
                         fake.claim(seq, "fake-specialist").ok();
-                        if fake.emit("text", &format!("specialist did: {content}")).is_ok() {
+                        if fake.emit_reply(seq,"text", &format!("specialist did: {content}")).is_ok() {
                             handled.insert(seq);
                         }
                     }

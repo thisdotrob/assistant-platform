@@ -23,7 +23,7 @@ export const HEARTBEAT = `${SESSION_DIR}/.heartbeat`;
 // Schema versions this runner can read/write (mirrors CURRENT_OUTBOUND_VERSION
 // and the host's SchemaRange::new(1, CURRENT_OUTBOUND_VERSION)).
 const SUPPORTED_MIN = 1;
-const SUPPORTED_MAX = 2;
+const SUPPORTED_MAX = 3;
 
 // SQLite primary result codes that indicate transient contention worth a retry.
 // We mask the extended code to its low byte so e.g. SQLITE_IOERR_LOCK (3850)
@@ -93,13 +93,14 @@ export class Session {
       const db = openRo(INBOUND_DB);
       try {
         return db
-          .prepare('SELECT seq, sender, content, metadata FROM messages_in ORDER BY seq')
+          .prepare('SELECT seq, sender, content, metadata, thread_id FROM messages_in ORDER BY seq')
           .all()
           .map((r) => ({
             seq: Number(r.seq),
             sender: r.sender,
             content: r.content,
             metadata: r.metadata ?? null,
+            threadId: r.thread_id ?? null,
           }));
       } finally {
         db.close();
@@ -156,8 +157,8 @@ export class Session {
         const head = db.prepare('SELECT MAX(seq) AS m FROM messages_out').get();
         let seq = head && head.m != null ? Number(head.m) + 2 : 1;
         const insert = db.prepare(
-          `INSERT INTO messages_out (seq, kind, content, metadata, created_at)
-           VALUES (?, ?, ?, NULL, datetime('now'))`,
+          `INSERT INTO messages_out (seq, kind, content, metadata, in_seq, created_at)
+           VALUES (?, ?, ?, NULL, ?, datetime('now'))`,
         );
         const ack = db.prepare(
           `INSERT OR REPLACE INTO processing_ack (in_seq, claimed_by, claimed_at)
@@ -167,7 +168,7 @@ export class Session {
         db.exec('BEGIN IMMEDIATE');
         try {
           for (const { kind, content } of rows) {
-            insert.run(seq, kind, content);
+            insert.run(seq, kind, content, inSeq);
             seqs.push(seq);
             seq += 2;
           }
@@ -182,6 +183,75 @@ export class Session {
         db.close();
       }
     });
+  }
+
+  // Read all outbound messages (the container's own replies). Used together with
+  // readInbound() to reconstruct conversation history for a Claude turn.
+  async readOutbound() {
+    return withRetry(() => {
+      const db = openRo(OUTBOUND_DB);
+      try {
+        return db
+          .prepare('SELECT seq, kind, content, in_seq FROM messages_out ORDER BY seq')
+          .all()
+          .map((r) => ({
+            seq: Number(r.seq),
+            kind: r.kind,
+            content: r.content,
+            inSeq: r.in_seq != null ? Number(r.in_seq) : null,
+          }));
+      } finally {
+        db.close();
+      }
+    });
+  }
+
+  // Build the Anthropic messages array for the turn at `currentSeq`: all prior
+  // user and assistant turns in order, excluding the current message itself.
+  // Inbound rows become role:'user'; outbound `kind:'text'` rows become
+  // role:'assistant'. `schedule-meta` inbound rows are skipped (host state, not
+  // conversation turns). Returns [] when there is no prior history.
+  //
+  // When `threadId` is provided (non-null), history is restricted to the Slack
+  // thread with that root TS. Inbound rows are filtered to those whose `thread_id`
+  // matches; outbound rows are filtered to those whose `in_seq` maps to an
+  // included inbound row. This prevents cross-thread context contamination and
+  // bounds history growth on busy channels.
+  //
+  // For outbound rows, the v3 `in_seq` field is used to determine ordering
+  // rather than the outbound seq number. This is necessary because outbound seqs
+  // are allocated from a separate counter and can be numerically higher than
+  // subsequent inbound seqs, which would otherwise incorrectly exclude recent
+  // replies from the history (e.g. outbound seq 45 for in_seq 40 being excluded
+  // when building history for in_seq 42).
+  async buildHistory(currentSeq, threadId) {
+    const [inbound, outbound] = await Promise.all([this.readInbound(), this.readOutbound()]);
+    const entries = [];
+    // Track which inbound seqs belong to this thread so we can filter outbound.
+    const threadInSeqs = new Set();
+    for (const row of inbound) {
+      if (row.seq >= currentSeq) continue;
+      if (row.sender === 'schedule-meta') continue;
+      if (threadId != null && row.threadId !== threadId) continue;
+      entries.push({ seq: row.seq, role: 'user', content: row.content });
+      threadInSeqs.add(row.seq);
+    }
+    for (const row of outbound) {
+      if (row.kind !== 'text') continue;
+      // Use in_seq (v3+) as the ordering key: it records which inbound turn this
+      // reply belongs to, so the comparison against currentSeq is correct
+      // regardless of the raw outbound seq number. Fall back to the outbound seq
+      // for pre-v3 rows written before in_seq was tracked.
+      const orderSeq = row.inSeq != null ? row.inSeq : row.seq;
+      if (orderSeq >= currentSeq) continue;
+      // When thread filtering: only include replies whose inbound is in the thread.
+      // Pre-v3 rows (inSeq == null) are excluded — they can't be attributed to a
+      // thread and their raw odd seqs would create consecutive same-role entries.
+      if (threadId != null && (row.inSeq == null || !threadInSeqs.has(row.inSeq))) continue;
+      entries.push({ seq: orderSeq, role: 'assistant', content: row.content });
+    }
+    entries.sort((a, b) => a.seq - b.seq);
+    return entries.map(({ role, content }) => ({ role, content }));
   }
 
   // The inbound seqs already fully processed (reply committed with its ack).

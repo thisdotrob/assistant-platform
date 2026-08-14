@@ -102,6 +102,7 @@ where
             sender: SCHEDULER_SENDER.to_string(),
             content: item.intent.clone(),
             metadata: None,
+            thread_id: None,
         };
 
         // Key the inbound enqueue on the occurrence so a retry (after a failed
