@@ -273,7 +273,7 @@ fn run_slack_inner(opts: SlackRunOptions) -> Result<(), HostError> {
 
     let image = base_image_ref(env!("CARGO_PKG_VERSION"));
     let config = HostConfig::new(image, vec![sessions_dir.clone()], opts.mode, onecli)
-        .with_onecli_agent(onecli_agent, paths.dir.clone())
+        .with_onecli_agent(onecli_agent.clone(), paths.dir.clone())
         .with_memory(
             instance_layout.central_db_path(),
             HOST_AGENT_GROUP,
