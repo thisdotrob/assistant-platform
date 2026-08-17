@@ -61,6 +61,7 @@ fn stub_specialist_spec() -> SpecialistSpec {
         allowed_tools: vec!["Bash(agent-browser:*)".to_string()],
         max_turns: 40,
         extra_env: Vec::new(),
+        onecli_agent: "test-orchestrator-browser".to_string(),
     }
 }
 

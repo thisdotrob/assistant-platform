@@ -313,6 +313,13 @@ where
     };
     config.onecli_agent = spec.onecli_agent.clone();
     config.memory = None;
+    // Each specialist gets its own persistent workspace under the instance root,
+    // keyed by group_slug (stable across delegation runs). Derived from
+    // sessions_dir's parent (the instance root: sessions_dir = <root>/sessions/).
+    if let Some(instance_root) = sessions_dir.parent() {
+        let workspace_dir = instance_root.join("workspaces").join(&spec.group_slug);
+        config = config.with_workspace(workspace_dir);
+    }
     config.extra_env = spec.extra_env.clone();
     config.extra_env.extend([
         (

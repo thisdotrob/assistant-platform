@@ -20,7 +20,8 @@ use assistant_memory::{
 use rusqlite::Connection;
 use assistant_runtime_docker::{
     build_session_mounts, classify, prepare_spawn, ContainerId, ContainerRuntime, ImageRef,
-    LifecyclePolicy, OneCliReadiness, RunnerAuthMode, RuntimeState, SchemaRange, SessionPaths,
+    LifecyclePolicy, Mount, OneCliReadiness, RunnerAuthMode, RuntimeState, SchemaRange,
+    SessionPaths, CONTAINER_WORKSPACE,
 };
 use assistant_session::{
     current_outbound_compat, enqueue_inbound_keyed, init_session, mark_delivered,
@@ -72,6 +73,10 @@ pub struct HostConfig {
     /// routing menu; the specialist path carries its spec's per-image env plus the
     /// generic `ASSISTANT_SPECIALIST_*` turn config.
     pub extra_env: Vec<(String, String)>,
+    /// Per-agent persistent workspace directory on the host, mounted read-write
+    /// into the container at `/workspace`. `None` disables the workspace mount
+    /// (offline/test paths that don't need persistence).
+    pub workspace_dir: Option<PathBuf>,
 }
 
 /// Where and how a turn loads its pre-reply memory context. The catalog table
@@ -122,6 +127,7 @@ impl HostConfig {
             shim_supported: vec![RUNNER_PROTOCOL_VERSION.to_string()],
             memory: None,
             extra_env: Vec::new(),
+            workspace_dir: None,
         }
     }
 
@@ -165,6 +171,16 @@ impl HostConfig {
     pub fn with_onecli_agent(mut self, agent: String, ca_dir: PathBuf) -> Self {
         self.onecli_agent = agent;
         self.onecli_ca_dir = ca_dir;
+        self
+    }
+
+    /// Mount a persistent workspace directory into containers at `/workspace`.
+    /// The directory is added to the mount allowlist and created by `ensure_spawned`
+    /// before the first container starts. `WORKSPACE=/workspace` is set in the
+    /// container env so agent code can reference it portably.
+    pub fn with_workspace(mut self, dir: PathBuf) -> Self {
+        self.allowed_roots.push(dir.clone());
+        self.workspace_dir = Some(dir);
         self
     }
 }
@@ -301,7 +317,11 @@ where
             inbox_dir: layout.inbox_dir(),
             outbox_dir: layout.outbox_dir(),
         };
-        let mounts = build_session_mounts(&paths, None);
+        let mut mounts = build_session_mounts(&paths, None);
+        if let Some(ref workspace_dir) = self.config.workspace_dir {
+            std::fs::create_dir_all(workspace_dir)?;
+            mounts.push(Mount::read_write(workspace_dir.clone(), CONTAINER_WORKSPACE));
+        }
         let mut spec = prepare_spawn(
             self.container_name(),
             self.config.image.clone(),
@@ -347,6 +367,9 @@ where
         // last so it travels into the container alongside the auth/gateway env.
         spec.env
             .extend(self.config.extra_env.iter().cloned());
+        if self.config.workspace_dir.is_some() {
+            spec.env.push(("WORKSPACE".to_string(), CONTAINER_WORKSPACE.to_string()));
+        }
         let id = self
             .runtime
             .spawn(&spec)

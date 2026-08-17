@@ -117,6 +117,13 @@ impl InstanceLayout {
         self.root.join("specialists")
     }
 
+    /// Per-agent persistent workspace directory, keyed by `slug`. The orchestrator
+    /// uses its `onecli_agent` name; specialists use their `group_slug`. Mounted
+    /// read-write into containers at `/workspace` so state survives across turns.
+    pub fn workspace_dir(&self, slug: &str) -> PathBuf {
+        self.root.join("workspaces").join(slug)
+    }
+
     pub fn setup_dir(&self) -> PathBuf {
         self.root.join("setup")
     }

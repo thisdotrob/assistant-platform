@@ -28,15 +28,28 @@ CREATE INDEX idx_scheduled_items_agent_status ON scheduled_items (agent_group_id
 CREATE INDEX idx_scheduled_items_due ON scheduled_items (status, process_after);
 ";
 
+const SCHEDULER_PROJECTION_V3: &str = "
+ALTER TABLE scheduled_items ADD COLUMN gate_command TEXT;
+";
+
 /// assistant-scheduler's central-DB migrations beyond the baseline `scheduled_items` /
-/// `scheduled_occurrences` (v1). The lease columns and listing indexes are v2.
+/// `scheduled_occurrences` (v1). The lease columns and listing indexes are v2;
+/// the per-item gate command column is v3.
 pub fn migrations() -> Vec<Migration> {
-    vec![Migration::new(
-        crate::MODULE_ID,
-        2,
-        "scheduled_projection_leases",
-        SCHEDULER_PROJECTION_V2,
-    )]
+    vec![
+        Migration::new(
+            crate::MODULE_ID,
+            2,
+            "scheduled_projection_leases",
+            SCHEDULER_PROJECTION_V2,
+        ),
+        Migration::new(
+            crate::MODULE_ID,
+            3,
+            "scheduled_projection_gate_command",
+            SCHEDULER_PROJECTION_V3,
+        ),
+    ]
 }
 
 #[derive(Debug)]
@@ -112,6 +125,9 @@ pub struct ProjectedItem {
     pub recurrence: Option<Recurrence>,
     pub status: ScheduleStatus,
     pub revision: u32,
+    /// Shell command run on the host before the scheduled turn fires. Mirrors
+    /// `ScheduledMessageMeta::gate_command`; `None` means no gate.
+    pub gate_command: Option<String>,
 }
 
 /// Project a scheduled message's metadata into the central `scheduled_items`
@@ -128,8 +144,8 @@ pub fn upsert_item(
     };
     conn.execute(
         "INSERT INTO scheduled_items
-             (id, agent_group_id, session_id, intent, process_after, recurrence, status, revision)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             (id, agent_group_id, session_id, intent, process_after, recurrence, status, revision, gate_command)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(id) DO UPDATE SET
              agent_group_id = excluded.agent_group_id,
              session_id     = excluded.session_id,
@@ -137,7 +153,8 @@ pub fn upsert_item(
              process_after  = excluded.process_after,
              recurrence     = excluded.recurrence,
              status         = excluded.status,
-             revision       = excluded.revision",
+             revision       = excluded.revision,
+             gate_command   = excluded.gate_command",
         rusqlite::params![
             meta.scheduled_item_id,
             meta.agent_group_id,
@@ -147,6 +164,7 @@ pub fn upsert_item(
             recurrence_json,
             meta.status.as_str(),
             meta.revision,
+            meta.gate_command,
         ],
     )?;
     Ok(())
@@ -265,7 +283,7 @@ pub fn resume_item(conn: &Connection, scheduled_item_id: &str) -> Result<(), Pro
 }
 
 const ITEM_COLUMNS: &str =
-    "id, agent_group_id, session_id, intent, process_after, recurrence, status, revision";
+    "id, agent_group_id, session_id, intent, process_after, recurrence, status, revision, gate_command";
 
 /// List an agent's projected scheduled items, optionally narrowed to one status,
 /// ordered by due time then id. Scoped to a single `agent_group_id`, never
@@ -353,6 +371,7 @@ fn row_to_item(row: &rusqlite::Row) -> Result<ProjectedItem, ProjectionError> {
         recurrence,
         status,
         revision: row.get(7)?,
+        gate_command: row.get(8)?,
     })
 }
 
@@ -399,11 +418,12 @@ mod tests {
     }
 
     #[test]
-    fn v2_migration_starts_at_version_two() {
-        let only = migrations();
-        assert_eq!(only.len(), 1);
-        assert_eq!(only[0].module_id, crate::MODULE_ID);
-        assert_eq!(only[0].version, 2);
+    fn projection_migrations_cover_v2_and_v3() {
+        let ms = migrations();
+        assert_eq!(ms.len(), 2);
+        assert!(ms.iter().all(|m| m.module_id == crate::MODULE_ID));
+        assert_eq!(ms[0].version, 2);
+        assert_eq!(ms[1].version, 3);
     }
 
     #[test]

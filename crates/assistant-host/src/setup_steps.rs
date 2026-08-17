@@ -254,35 +254,36 @@ mod tests {
         baseline_migrations(order)
     }
 
-    /// The five domain v2 migrations apply cleanly on top of the baseline (the
-    /// scheduler one ALTERs a baseline table, so it would fail if the baseline
-    /// were missing), and a rerun is a no-op.
+    /// The domain migrations (one v2 per module, plus scheduler v3) apply cleanly
+    /// on top of the baseline (the scheduler ALTERs baseline tables, so it would
+    /// fail if the baseline were missing), and a rerun is a no-op.
     #[test]
     fn domain_migrations_layer_v2_on_baseline() {
         let mut conn = open_in_memory().unwrap();
         apply(&mut conn, &baseline_set()).unwrap();
 
         let report = apply(&mut conn, &domain_migrations()).unwrap();
-        assert_eq!(report.applied.len(), 5);
+        // router v2, permissions v2, scheduler v2+v3, memory v2, agent_graph v2 = 6
+        assert_eq!(report.applied.len(), 6);
 
         let versions = applied_versions(&conn).unwrap();
-        for module in [
-            assistant_router::MODULE_ID,
-            assistant_permissions::MODULE_ID,
-            assistant_scheduler::MODULE_ID,
-            assistant_memory::MODULE_ID,
-            assistant_agent_graph::MODULE_ID,
+        for (module, expected_v) in [
+            (assistant_router::MODULE_ID, 2),
+            (assistant_permissions::MODULE_ID, 2),
+            (assistant_scheduler::MODULE_ID, 3),
+            (assistant_memory::MODULE_ID, 2),
+            (assistant_agent_graph::MODULE_ID, 2),
         ] {
             assert!(
-                versions.contains(&(module.to_string(), 2)),
-                "expected {module} v2 applied, got {versions:?}"
+                versions.contains(&(module.to_string(), expected_v)),
+                "expected {module} v{expected_v} applied, got {versions:?}"
             );
         }
 
-        // Idempotent: a second apply skips all five.
+        // Idempotent: a second apply skips all six.
         let rerun = apply(&mut conn, &domain_migrations()).unwrap();
         assert!(rerun.applied.is_empty());
-        assert_eq!(rerun.skipped.len(), 5);
+        assert_eq!(rerun.skipped.len(), 6);
     }
 
     /// A layout under a fresh temp home with the instance dirs and a readiness
@@ -324,7 +325,7 @@ mod tests {
         let versions = applied_versions(&conn).unwrap();
         assert!(versions.contains(&(assistant_memory::MODULE_ID.to_string(), 2)));
         assert!(versions.contains(&(assistant_permissions::MODULE_ID.to_string(), 2)));
-        assert!(versions.contains(&(assistant_scheduler::MODULE_ID.to_string(), 2)));
+        assert!(versions.contains(&(assistant_scheduler::MODULE_ID.to_string(), 3)));
         assert!(versions.contains(&(assistant_router::MODULE_ID.to_string(), 2)));
         assert!(versions.contains(&(assistant_agent_graph::MODULE_ID.to_string(), 2)));
     }

@@ -77,6 +77,8 @@ pub const CONTAINER_OUTBOUND_DB: &str = "/session/outbound.db";
 pub const CONTAINER_HEARTBEAT: &str = "/session/.heartbeat";
 pub const CONTAINER_INBOX: &str = "/session/inbox";
 pub const CONTAINER_OUTBOX: &str = "/session/outbox";
+/// The container path for the per-agent persistent workspace.
+pub const CONTAINER_WORKSPACE: &str = "/workspace";
 
 /// Build the mount set for a session run. Inbound DB and inbox are read-only;
 /// outbound DB, heartbeat, and outbox are writable. An optional memory mount is

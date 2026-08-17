@@ -159,9 +159,11 @@ fn run_inner(opts: RunOptions) -> Result<(), HostError> {
     let onecli = onecli::probe(&instance_layout);
     let onecli_agent = onecli::agent_identifier(&instance_layout);
     let onecli_ca_dir = onecli::OneCliPaths::for_instance(&instance_layout).dir;
+    let workspace_dir = instance_layout.workspace_dir(&onecli_agent);
     let image = base_image_ref(env!("CARGO_PKG_VERSION"));
     let config = HostConfig::new(image, vec![sessions_dir], opts.mode, onecli)
         .with_onecli_agent(onecli_agent, onecli_ca_dir)
+        .with_workspace(workspace_dir)
         .with_memory(
             instance_layout.central_db_path(),
             HOST_AGENT_GROUP,
@@ -274,6 +276,7 @@ fn run_slack_inner(opts: SlackRunOptions) -> Result<(), HostError> {
     let image = base_image_ref(env!("CARGO_PKG_VERSION"));
     let config = HostConfig::new(image, vec![sessions_dir.clone()], opts.mode, onecli)
         .with_onecli_agent(onecli_agent.clone(), paths.dir.clone())
+        .with_workspace(instance_layout.workspace_dir(&onecli_agent))
         .with_memory(
             instance_layout.central_db_path(),
             HOST_AGENT_GROUP,

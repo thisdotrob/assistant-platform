@@ -96,12 +96,40 @@ where
             continue;
         };
 
+        // Pre-task gate: if configured, run the command before deciding to fire.
+        // Empty stdout or non-zero exit → skip (advance the schedule without inference).
+        // Non-empty stdout → fire, injecting that stdout as the turn's metadata context.
+        // A command that fails to spawn (IO error) is non-fatal but retried: leave
+        // the lease to expire rather than advancing the schedule.
+        let gate_metadata: Option<String>;
+        if let Some(gate_cmd) = &item.gate_command {
+            match run_gate(gate_cmd) {
+                Ok(GateOutcome::Skip) => {
+                    complete_occurrence(conn, &lease.occurrence, now)
+                        .map_err(|e| HostError::Db(e.to_string()))?;
+                    continue;
+                }
+                Ok(GateOutcome::Fire(metadata)) => {
+                    gate_metadata = metadata;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "scheduler: gate command error for item {}, leaving for retry: {e}",
+                        lease.occurrence.scheduled_item_id
+                    );
+                    continue;
+                }
+            }
+        } else {
+            gate_metadata = None;
+        }
+
         let layout = SessionLayout::derive(sessions_dir, group, session_id)?;
         let mut host = Host::new(layout, runtime_factory(), host_config.clone());
         let inbound = InboundMessage {
             sender: SCHEDULER_SENDER.to_string(),
             content: item.intent.clone(),
-            metadata: None,
+            metadata: gate_metadata,
             thread_id: None,
         };
 
@@ -130,6 +158,34 @@ where
     }
 
     Ok(SweepReport { expired_sticky, fired })
+}
+
+/// The outcome of running a pre-task gate command.
+enum GateOutcome {
+    /// Gate passed; optional stdout to inject as the turn's metadata context.
+    Fire(Option<String>),
+    /// Gate says no work right now — advance the schedule without inference.
+    Skip,
+}
+
+/// Run a pre-task gate command via `sh -c`. Returns `Ok(Skip)` on non-zero exit
+/// or empty stdout (no work to do), `Ok(Fire(Some(stdout)))` when there is work,
+/// and `Err` when the command could not be spawned at all (infrastructure issue).
+fn run_gate(cmd: &str) -> Result<GateOutcome, String> {
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .output()
+        .map_err(|e| format!("could not spawn gate command: {e}"))?;
+    if !output.status.success() {
+        return Ok(GateOutcome::Skip);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        Ok(GateOutcome::Skip)
+    } else {
+        Ok(GateOutcome::Fire(Some(stdout)))
+    }
 }
 
 /// Render an agent group's live scheduled items (active and paused) as a

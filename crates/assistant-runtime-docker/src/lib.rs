@@ -36,7 +36,7 @@ pub use lifecycle::{
 pub use mount::{
     build_session_mounts, validate_mounts, MemoryMountSpec, Mount, MountMode, SessionPaths,
     CONTAINER_HEARTBEAT, CONTAINER_INBOUND_DB, CONTAINER_INBOX, CONTAINER_OUTBOUND_DB,
-    CONTAINER_OUTBOX,
+    CONTAINER_OUTBOX, CONTAINER_WORKSPACE,
 };
 pub use readiness::{
     docker_daemon_ready, image_resolves, mount_roots_ready, skipped_no_docker, CheckStatus,

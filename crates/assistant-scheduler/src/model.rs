@@ -408,6 +408,12 @@ pub struct ScheduledMessageMeta {
     /// The highest occurrence sequence allocated so far (0 before the first).
     #[serde(default)]
     pub occurrence_seq: u64,
+    /// Optional shell command run on the host before each scheduled turn fires.
+    /// A non-zero exit or empty stdout skips the turn (advances the schedule
+    /// without inference). Non-empty stdout is injected as the turn's metadata
+    /// context. `None` disables the gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_command: Option<String>,
 }
 
 impl ScheduledMessageMeta {
@@ -442,6 +448,7 @@ impl ScheduledMessageMeta {
             revision: 1,
             revisions: vec![revision],
             occurrence_seq: 0,
+            gate_command: None,
         })
     }
 

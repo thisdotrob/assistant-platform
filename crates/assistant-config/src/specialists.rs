@@ -157,6 +157,7 @@ mod tests {
             allowed_tools: vec!["Bash(agent-browser:*)".to_string()],
             max_turns: 40,
             extra_env: vec![],
+            onecli_agent: "test-agent-browser".to_string(),
         }
     }
 
