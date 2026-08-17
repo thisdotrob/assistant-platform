@@ -19,8 +19,10 @@ pub struct Product {
     pub profile_id: &'static str,
     pub profile_version: &'static str,
     pub product_root: PathBuf,
-    /// The specialists this product registers (e.g. the browser specialist).
-    pub specialists: Vec<SpecialistSpec>,
+    /// The specialists this product registers. Called with the resolved
+    /// orchestrator OneCLI agent name so each specialist can derive its own
+    /// scoped identity. Passed through to [`SlackRunOptions`].
+    pub specialists: Box<dyn Fn(&str) -> Vec<SpecialistSpec>>,
     /// The product's memory categories. Scaffolded (idempotently) onto the
     /// orchestrator memory root when a `run`/`serve-slack` session starts: the
     /// category directories plus the reserved `INDEX.md` map.

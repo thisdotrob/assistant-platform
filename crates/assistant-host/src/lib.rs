@@ -216,10 +216,12 @@ pub struct SlackRunOptions {
     pub mode: RunnerAuthMode,
     /// Host-facing OneCLI proxy URL the Slack calls route through.
     pub proxy_url: String,
-    /// The specialists this product registers. The orchestrator may delegate to
-    /// any of them by `route_name`; each runs in its own custom image. Empty
-    /// disables delegation (the orchestrator gets no `delegate` tool).
-    pub specialists: Vec<SpecialistSpec>,
+    /// The specialists this product registers. Called with the resolved
+    /// orchestrator OneCLI agent name so each specialist can derive its own
+    /// scoped identity (e.g. `format!("{orchestrator}-browser")`). Returns the
+    /// compiled-in baseline; config-registered specialists are merged on top.
+    /// Empty return disables delegation (the orchestrator gets no `delegate` tool).
+    pub specialists: Box<dyn Fn(&str) -> Vec<SpecialistSpec>>,
     /// The product's memory categories. Scaffolded (idempotently) onto the
     /// orchestrator memory root at startup; empty disables scaffolding.
     pub memory_taxonomy: Vec<String>,
@@ -299,8 +301,9 @@ fn run_slack_inner(opts: SlackRunOptions) -> Result<(), HostError> {
         load_config(&instance_layout.config_path()).map_err(|e| HostError::Layout(e.to_string()))?;
     apply_env_overlay(&mut config_toml, &env_overlay_from_process())
         .map_err(|e| HostError::Layout(e.to_string()))?;
+    let compiled = (opts.specialists)(&onecli_agent);
     let specialists = registered_specialists(
-        opts.specialists,
+        compiled,
         &config_toml.specialists,
         &instance_layout.specialists_dir(),
     )
@@ -599,6 +602,7 @@ mod tests {
             allowed_tools: vec![],
             max_turns: 1,
             extra_env: vec![],
+            onecli_agent: format!("test-orchestrator-{route}"),
         }
     }
 

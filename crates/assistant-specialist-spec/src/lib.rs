@@ -65,14 +65,12 @@ pub struct SpecialistSpec {
     /// container, for any in-image tooling the specialist reads (the host adds the
     /// generic `ASSISTANT_SPECIALIST_*` turn-config vars on top of these).
     pub extra_env: Vec<(String, String)>,
-    /// The OneCLI agent identity to use when spawning this specialist's
-    /// containers. When set, the specialist fetches its proxy env and CA from
-    /// `GET /api/container-config?agent=<onecli_agent>` instead of inheriting
-    /// the orchestrator's identity, enabling agent-scoped credentials (e.g. a
-    /// Slack user token the orchestrator must not receive). When absent the
-    /// orchestrator's identity is used.
-    #[serde(default)]
-    pub onecli_agent: Option<String>,
+    /// The OneCLI agent identity this specialist's containers authenticate as.
+    /// The host queries `GET /api/container-config?agent=<onecli_agent>` when
+    /// spawning the specialist's container, giving it its own scoped credentials
+    /// rather than sharing the orchestrator's identity. Required: every specialist
+    /// must declare its own identity so credential scoping is always explicit.
+    pub onecli_agent: String,
 }
 
 /// A `{ name, description }` pair the host hands the orchestrator (as JSON in
@@ -120,7 +118,7 @@ mod tests {
             allowed_tools: vec!["Bash(agent-browser:*)".to_string()],
             max_turns: 40,
             extra_env: vec![],
-            onecli_agent: None,
+            onecli_agent: "test-agent-browser".to_string(),
         }
     }
 
