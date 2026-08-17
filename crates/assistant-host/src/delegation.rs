@@ -311,6 +311,9 @@ where
         RunnerAuthMode::Stub => RunnerAuthMode::Stub,
         _ => RunnerAuthMode::Specialist,
     };
+    if let Some(agent) = &spec.onecli_agent {
+        config.onecli_agent = agent.clone();
+    }
     config.memory = None;
     config.extra_env = spec.extra_env.clone();
     config.extra_env.extend([
