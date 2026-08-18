@@ -55,7 +55,7 @@ pub use assistant_runtime_docker::RunnerAuthMode;
 
 /// Re-exported so products can register specialists (and tests can build specs)
 /// without taking a direct dependency on `assistant-specialist-spec`.
-pub use assistant_specialist_spec::SpecialistSpec;
+pub use assistant_specialist_spec::{SpecialistSpec, StandingTask};
 
 /// Re-exported so products and tests can set the Slack serve gate without taking
 /// direct dependencies on `assistant-router`/`assistant-permissions`.
@@ -227,6 +227,9 @@ pub struct SlackRunOptions {
     /// The product's memory categories. Scaffolded (idempotently) onto the
     /// orchestrator memory root at startup; empty disables scaffolding.
     pub memory_taxonomy: Vec<String>,
+    /// Product-level recurring tasks to register at startup. Combined with any
+    /// tasks declared on registered specialists. Empty disables product-level tasks.
+    pub standing_tasks: Vec<StandingTask>,
 }
 
 /// Serve Slack turns over Socket Mode until the process is signalled, returning a
@@ -320,6 +323,37 @@ fn run_slack_inner(opts: SlackRunOptions) -> Result<(), HostError> {
     let specialists_json = serde_json::to_string(&menu)
         .map_err(|e| HostError::Layout(format!("serializing the specialist menu failed: {e}")))?;
     config.extra_env = vec![("ASSISTANT_SPECIALISTS".to_string(), specialists_json)];
+
+    // Collect standing tasks from product config and all registered specialists,
+    // pairing each with its gate OneCLI agent identity. Specialist tasks use the
+    // specialist's own agent (so the gate container has its credentials); product-
+    // level tasks pass None (host subprocess fallback).
+    let mut all_standing: Vec<(StandingTask, Option<String>)> =
+        opts.standing_tasks.into_iter().map(|t| (t, None)).collect();
+    for spec in &specialists {
+        for task in &spec.standing_tasks {
+            all_standing.push((task.clone(), Some(spec.onecli_agent.clone())));
+        }
+    }
+    if !all_standing.is_empty() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        match assistant_db::open_central(&instance_layout.central_db_path()) {
+            Ok(conn) => {
+                if let Err(e) = crate::scheduler::ensure_standing_tasks(
+                    &conn,
+                    HOST_AGENT_GROUP,
+                    now,
+                    &all_standing,
+                ) {
+                    eprintln!("standing tasks: setup failed (continuing): {e}");
+                }
+            }
+            Err(e) => eprintln!("standing tasks: could not open central db (continuing): {e}"),
+        }
+    }
 
     let slack_opts = SlackServeOptions {
         sessions_dir,
@@ -606,6 +640,7 @@ mod tests {
             max_turns: 1,
             extra_env: vec![],
             onecli_agent: format!("test-orchestrator-{route}"),
+            standing_tasks: vec![],
         }
     }
 

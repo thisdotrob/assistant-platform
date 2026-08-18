@@ -291,7 +291,7 @@ where
                 return;
             }
             last_tick = Some(Instant::now());
-            scheduler_tick(&conn, &hosts, channel_ref, &opts, &runtime_factory);
+            scheduler_tick(&conn, &hosts, channel_ref, &opts, &runtime_factory, &completion_tx, &inflight);
         };
         run_listener(opener, &identity, stop, &mut sink, &mut tick)
             .map_err(|e| HostError::Channel(e.to_string()))
@@ -733,11 +733,13 @@ fn scheduler_tick<A, R, F>(
     channel: &SlackChannel<A>,
     opts: &SlackServeOptions,
     runtime_factory: &F,
+    completion_tx: &Sender<CompletedDelegation>,
+    inflight: &RefCell<Vec<JoinHandle<()>>>,
 ) where
     A: SlackApi,
-    R: ContainerRuntime,
+    R: ContainerRuntime + 'static,
     R::Error: std::fmt::Display,
-    F: Fn() -> R,
+    F: Fn() -> R + Send + Clone + 'static,
 {
     let Some(cfg) = opts.scheduler.as_ref() else {
         return;
@@ -784,10 +786,47 @@ fn scheduler_tick<A, R, F>(
             continue;
         };
 
+        // Pre-task gate: run the command before deciding to fire. Empty stdout
+        // or non-zero exit → skip (advance schedule without inference). Non-empty
+        // stdout → fire, injecting that stdout as the turn's metadata context.
+        // A command that fails to spawn is non-fatal but leaves the lease to expire.
+        let gate_metadata: Option<String>;
+        if let Some(gate_cmd) = &item.gate_command {
+            let outcome = match &item.gate_onecli_agent {
+                Some(agent) => crate::scheduler::run_gate_in_container(
+                    gate_cmd,
+                    agent,
+                    &opts.config.image.reference(),
+                    &opts.config.onecli_ca_dir,
+                ),
+                None => crate::scheduler::run_gate(gate_cmd),
+            };
+            match outcome {
+                Ok(crate::scheduler::GateOutcome::Skip) => {
+                    if let Err(err) = finalize_firing(conn, &lease.occurrence, item, now) {
+                        eprintln!("slack: finalizing gated-skip for channel {session_id}: {err}");
+                    }
+                    continue;
+                }
+                Ok(crate::scheduler::GateOutcome::Fire(metadata)) => {
+                    gate_metadata = metadata;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "slack: gate command error for item {}, leaving for retry: {e}",
+                        lease.occurrence.scheduled_item_id
+                    );
+                    continue;
+                }
+            }
+        } else {
+            gate_metadata = None;
+        }
+
         let inbound = InboundMessage {
             sender: "scheduler".to_string(),
             content: item.intent.clone(),
-            metadata: None,
+            metadata: gate_metadata,
             thread_id: None,
         };
         let replies = {
@@ -815,10 +854,31 @@ fn scheduler_tick<A, R, F>(
             chat_id: session_id.clone(),
             thread_root_id: None,
         };
-        // A scheduled turn has no human sender; provenance records the channel
-        // only (no source user).
+        // Non-delegate replies first, then delegate replies — mirrors handle_event's
+        // two-pass approach so the orchestrator's ack posts before specialist work.
+        // A scheduled turn has no human sender; provenance records the channel only.
         for reply in &replies {
+            if reply.kind == "delegate" {
+                continue;
+            }
             deliver_reply(conn, channel, &target, &session_id, opts, reply, None);
+        }
+        for reply in &replies {
+            if reply.kind != "delegate" {
+                continue;
+            }
+            process_delegation(
+                conn,
+                channel,
+                opts,
+                runtime_factory,
+                completion_tx,
+                inflight,
+                &target,
+                &session_id,
+                &reply.content,
+                None,
+            );
         }
 
         // Advance the per-session source of truth (occurrence sequence + next

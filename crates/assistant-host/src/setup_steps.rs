@@ -254,7 +254,7 @@ mod tests {
         baseline_migrations(order)
     }
 
-    /// The domain migrations (one v2 per module, plus scheduler v3) apply cleanly
+    /// The domain migrations (one v2 per module, plus scheduler v3+v4) apply cleanly
     /// on top of the baseline (the scheduler ALTERs baseline tables, so it would
     /// fail if the baseline were missing), and a rerun is a no-op.
     #[test]
@@ -263,14 +263,14 @@ mod tests {
         apply(&mut conn, &baseline_set()).unwrap();
 
         let report = apply(&mut conn, &domain_migrations()).unwrap();
-        // router v2, permissions v2, scheduler v2+v3, memory v2, agent_graph v2 = 6
-        assert_eq!(report.applied.len(), 6);
+        // router v2, permissions v2, scheduler v2+v3+v4, memory v2, agent_graph v2 = 7
+        assert_eq!(report.applied.len(), 7);
 
         let versions = applied_versions(&conn).unwrap();
         for (module, expected_v) in [
             (assistant_router::MODULE_ID, 2),
             (assistant_permissions::MODULE_ID, 2),
-            (assistant_scheduler::MODULE_ID, 3),
+            (assistant_scheduler::MODULE_ID, 4),
             (assistant_memory::MODULE_ID, 2),
             (assistant_agent_graph::MODULE_ID, 2),
         ] {
@@ -280,10 +280,10 @@ mod tests {
             );
         }
 
-        // Idempotent: a second apply skips all six.
+        // Idempotent: a second apply skips all seven.
         let rerun = apply(&mut conn, &domain_migrations()).unwrap();
         assert!(rerun.applied.is_empty());
-        assert_eq!(rerun.skipped.len(), 6);
+        assert_eq!(rerun.skipped.len(), 7);
     }
 
     /// A layout under a fresh temp home with the instance dirs and a readiness
@@ -325,7 +325,7 @@ mod tests {
         let versions = applied_versions(&conn).unwrap();
         assert!(versions.contains(&(assistant_memory::MODULE_ID.to_string(), 2)));
         assert!(versions.contains(&(assistant_permissions::MODULE_ID.to_string(), 2)));
-        assert!(versions.contains(&(assistant_scheduler::MODULE_ID.to_string(), 3)));
+        assert!(versions.contains(&(assistant_scheduler::MODULE_ID.to_string(), 4)));
         assert!(versions.contains(&(assistant_router::MODULE_ID.to_string(), 2)));
         assert!(versions.contains(&(assistant_agent_graph::MODULE_ID.to_string(), 2)));
     }

@@ -29,6 +29,8 @@
 // cancellations, memories }`) so the runner loop emits it with no special-casing.
 // A specialist requests no schedules, cancels nothing, and saves no memories.
 
+import { readFileSync } from 'node:fs';
+
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
 // Bound a multi-step turn so a stuck or looping specialist can't burn unbounded
@@ -62,16 +64,44 @@ export function specialistOptionsFromEnv(env) {
   return { systemPrompt, tools, allowedTools, maxTurns };
 }
 
+// Load the turn's MCP servers from the specialist image's Claude config
+// (`$CLAUDE_CONFIG_DIR/mcp.json`, default `/etc/claude/mcp.json`, baked in by the
+// image — see cleoclaw-specialist-ax/image `COPY mcp.json /etc/claude/mcp.json`).
+// The Agent SDK is hermetic: it connects only servers passed in
+// `options.mcpServers` and does NOT auto-load filesystem MCP config, so the
+// harness must read the file and pass it through explicitly. Credentials are not
+// in the file — outbound MCP traffic egresses via the OneCLI proxy (`HTTPS_PROXY`),
+// which injects the real per-host token by pattern match; the file carries only a
+// placeholder auth header the proxy overwrites. A missing or malformed file
+// yields no servers (the browser specialist ships none), so the turn runs with
+// just its built-in tools rather than failing.
+export function mcpServersFromConfig(env) {
+  const dir = env.CLAUDE_CONFIG_DIR ?? '/etc/claude';
+  try {
+    const parsed = JSON.parse(readFileSync(`${dir}/mcp.json`, 'utf8'));
+    const servers = parsed?.mcpServers;
+    if (servers && typeof servers === 'object') return servers;
+  } catch {
+    // no file / unreadable / bad JSON → no MCP servers
+  }
+  return {};
+}
+
 // Run one specialist turn over `goal`. Returns `{ text, scheduled, cancellations,
 // memories }` like the orchestrator responder; a specialist never schedules,
 // cancels, or saves memory, so those are always empty.
 export async function runSpecialistTurn(goal) {
   const { systemPrompt, tools, allowedTools, maxTurns } = specialistOptionsFromEnv(process.env);
+  const mcpServers = mcpServersFromConfig(process.env);
 
   const q = query({
     prompt: goal,
     options: {
       systemPrompt,
+      // MCP servers from the image's mcp.json (credentials injected by the
+      // OneCLI proxy, not carried here). The `mcp__<server>__*` patterns in
+      // `allowedTools` (from the specialist spec) auto-approve their tools.
+      mcpServers,
       // Enable only the host-declared built-in tools and auto-approve only the
       // host-declared patterns. With dontAsk the turn never hangs on a permission
       // prompt; anything outside the allowlist is denied rather than prompted.

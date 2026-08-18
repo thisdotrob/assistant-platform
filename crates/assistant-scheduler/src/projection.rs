@@ -32,9 +32,13 @@ const SCHEDULER_PROJECTION_V3: &str = "
 ALTER TABLE scheduled_items ADD COLUMN gate_command TEXT;
 ";
 
+const SCHEDULER_PROJECTION_V4: &str = "
+ALTER TABLE scheduled_items ADD COLUMN gate_onecli_agent TEXT;
+";
+
 /// assistant-scheduler's central-DB migrations beyond the baseline `scheduled_items` /
 /// `scheduled_occurrences` (v1). The lease columns and listing indexes are v2;
-/// the per-item gate command column is v3.
+/// the gate command column is v3; the gate OneCLI agent column is v4.
 pub fn migrations() -> Vec<Migration> {
     vec![
         Migration::new(
@@ -48,6 +52,12 @@ pub fn migrations() -> Vec<Migration> {
             3,
             "scheduled_projection_gate_command",
             SCHEDULER_PROJECTION_V3,
+        ),
+        Migration::new(
+            crate::MODULE_ID,
+            4,
+            "scheduled_projection_gate_onecli_agent",
+            SCHEDULER_PROJECTION_V4,
         ),
     ]
 }
@@ -125,9 +135,12 @@ pub struct ProjectedItem {
     pub recurrence: Option<Recurrence>,
     pub status: ScheduleStatus,
     pub revision: u32,
-    /// Shell command run on the host before the scheduled turn fires. Mirrors
-    /// `ScheduledMessageMeta::gate_command`; `None` means no gate.
+    /// Shell command run before the scheduled turn fires. `None` means no gate.
     pub gate_command: Option<String>,
+    /// OneCLI agent for container-based gate execution. When set the gate runs
+    /// inside a `docker run --rm` container with the agent's credentials
+    /// injected. `None` falls back to a raw host subprocess.
+    pub gate_onecli_agent: Option<String>,
 }
 
 /// Project a scheduled message's metadata into the central `scheduled_items`
@@ -144,17 +157,18 @@ pub fn upsert_item(
     };
     conn.execute(
         "INSERT INTO scheduled_items
-             (id, agent_group_id, session_id, intent, process_after, recurrence, status, revision, gate_command)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             (id, agent_group_id, session_id, intent, process_after, recurrence, status, revision, gate_command, gate_onecli_agent)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(id) DO UPDATE SET
-             agent_group_id = excluded.agent_group_id,
-             session_id     = excluded.session_id,
-             intent         = excluded.intent,
-             process_after  = excluded.process_after,
-             recurrence     = excluded.recurrence,
-             status         = excluded.status,
-             revision       = excluded.revision,
-             gate_command   = excluded.gate_command",
+             agent_group_id    = excluded.agent_group_id,
+             session_id        = excluded.session_id,
+             intent            = excluded.intent,
+             process_after     = excluded.process_after,
+             recurrence        = excluded.recurrence,
+             status            = excluded.status,
+             revision          = excluded.revision,
+             gate_command      = excluded.gate_command,
+             gate_onecli_agent = excluded.gate_onecli_agent",
         rusqlite::params![
             meta.scheduled_item_id,
             meta.agent_group_id,
@@ -165,6 +179,7 @@ pub fn upsert_item(
             meta.status.as_str(),
             meta.revision,
             meta.gate_command,
+            meta.gate_onecli_agent,
         ],
     )?;
     Ok(())
@@ -283,7 +298,7 @@ pub fn resume_item(conn: &Connection, scheduled_item_id: &str) -> Result<(), Pro
 }
 
 const ITEM_COLUMNS: &str =
-    "id, agent_group_id, session_id, intent, process_after, recurrence, status, revision, gate_command";
+    "id, agent_group_id, session_id, intent, process_after, recurrence, status, revision, gate_command, gate_onecli_agent";
 
 /// List an agent's projected scheduled items, optionally narrowed to one status,
 /// ordered by due time then id. Scoped to a single `agent_group_id`, never
@@ -372,6 +387,7 @@ fn row_to_item(row: &rusqlite::Row) -> Result<ProjectedItem, ProjectionError> {
         status,
         revision: row.get(7)?,
         gate_command: row.get(8)?,
+        gate_onecli_agent: row.get(9)?,
     })
 }
 
@@ -418,12 +434,13 @@ mod tests {
     }
 
     #[test]
-    fn projection_migrations_cover_v2_and_v3() {
+    fn projection_migrations_cover_v2_to_v4() {
         let ms = migrations();
-        assert_eq!(ms.len(), 2);
+        assert_eq!(ms.len(), 3);
         assert!(ms.iter().all(|m| m.module_id == crate::MODULE_ID));
         assert_eq!(ms[0].version, 2);
         assert_eq!(ms[1].version, 3);
+        assert_eq!(ms[2].version, 4);
     }
 
     #[test]
@@ -451,6 +468,23 @@ mod tests {
                 .unwrap();
             assert_eq!(n, 1, "missing index {idx}");
         }
+    }
+
+    #[test]
+    fn v4_adds_gate_onecli_agent_column() {
+        let conn = db();
+        let mut stmt = conn
+            .prepare("SELECT name FROM pragma_table_info('scheduled_items')")
+            .unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(
+            cols.contains(&"gate_onecli_agent".to_string()),
+            "missing gate_onecli_agent column"
+        );
     }
 
     #[test]

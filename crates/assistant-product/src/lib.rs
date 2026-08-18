@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use assistant_core::{platform_metadata, ProductMetadata};
-use assistant_host::SpecialistSpec;
+use assistant_host::{SpecialistSpec, StandingTask};
 
 /// Everything a product varies from the shared dispatch. `product_id` and
 /// `product_version`/`product_root` must be supplied by the product (so
@@ -27,6 +27,10 @@ pub struct Product {
     /// orchestrator memory root when a `run`/`serve-slack` session starts: the
     /// category directories plus the reserved `INDEX.md` map.
     pub memory_taxonomy: Vec<&'static str>,
+    /// Product-level recurring tasks declared at the orchestrator level. Combined
+    /// with any tasks declared on registered specialists at startup. Empty vec
+    /// disables product-level standing tasks.
+    pub standing_tasks: Vec<StandingTask>,
 }
 
 /// Parse argv and dispatch the requested command, returning the process exit
@@ -374,6 +378,7 @@ pub fn run(product: Product) -> i32 {
             proxy_url,
             memory_taxonomy: product.memory_taxonomy.iter().map(|s| s.to_string()).collect(),
             specialists: product.specialists,
+            standing_tasks: product.standing_tasks,
         });
         return code;
     }

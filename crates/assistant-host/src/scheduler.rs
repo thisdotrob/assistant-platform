@@ -20,9 +20,12 @@ use std::path::Path;
 use assistant_router::expire_sticky;
 use assistant_runtime_docker::ContainerRuntime;
 use assistant_scheduler::{
-    claim_due, complete_occurrence, list_items, ProjectedItem, Recurrence, ScheduleStatus, Weekday,
+    claim_due, complete_occurrence, generate_scheduled_item_id, item_status, list_items, upsert_item,
+    ContextPolicy, ProjectedItem, Recurrence, ScheduleIntent, ScheduledMessageMeta, ScheduleStatus,
+    Weekday,
 };
 use assistant_session::{InboundMessage, SessionLayout};
+use assistant_specialist_spec::StandingTask;
 use rusqlite::Connection;
 
 use crate::error::HostError;
@@ -103,7 +106,16 @@ where
         // the lease to expire rather than advancing the schedule.
         let gate_metadata: Option<String>;
         if let Some(gate_cmd) = &item.gate_command {
-            match run_gate(gate_cmd) {
+            let outcome = match &item.gate_onecli_agent {
+                Some(agent) => run_gate_in_container(
+                    gate_cmd,
+                    agent,
+                    &host_config.image.reference(),
+                    &host_config.onecli_ca_dir,
+                ),
+                None => run_gate(gate_cmd),
+            };
+            match outcome {
                 Ok(GateOutcome::Skip) => {
                     complete_occurrence(conn, &lease.occurrence, now)
                         .map_err(|e| HostError::Db(e.to_string()))?;
@@ -161,17 +173,17 @@ where
 }
 
 /// The outcome of running a pre-task gate command.
-enum GateOutcome {
+pub(crate) enum GateOutcome {
     /// Gate passed; optional stdout to inject as the turn's metadata context.
     Fire(Option<String>),
     /// Gate says no work right now — advance the schedule without inference.
     Skip,
 }
 
-/// Run a pre-task gate command via `sh -c`. Returns `Ok(Skip)` on non-zero exit
-/// or empty stdout (no work to do), `Ok(Fire(Some(stdout)))` when there is work,
-/// and `Err` when the command could not be spawned at all (infrastructure issue).
-fn run_gate(cmd: &str) -> Result<GateOutcome, String> {
+/// Run a pre-task gate command via `sh -c` on the host process. Returns
+/// `Ok(Skip)` on non-zero exit or empty stdout, `Ok(Fire(Some(stdout)))` when
+/// there is work, and `Err` when the command could not be spawned at all.
+pub(crate) fn run_gate(cmd: &str) -> Result<GateOutcome, String> {
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)
@@ -186,6 +198,129 @@ fn run_gate(cmd: &str) -> Result<GateOutcome, String> {
     } else {
         Ok(GateOutcome::Fire(Some(stdout)))
     }
+}
+
+/// Run a pre-task gate command inside a `docker run --rm` container, with the
+/// OneCLI proxy env and CA trust anchor injected for `gate_agent`. This mirrors
+/// how normal turns get credentials — the container routes all HTTPS through the
+/// proxy, which injects the agent's credentials per request. Falls back to host
+/// execution when no OneCLI gateway is configured.
+pub(crate) fn run_gate_in_container(
+    cmd: &str,
+    gate_agent: &str,
+    image: &str,
+    ca_dir: &std::path::Path,
+) -> Result<GateOutcome, String> {
+    let Some(gateway_url) = crate::onecli::gateway_url() else {
+        // No gateway configured (stub / offline mode): fall back to host.
+        return run_gate(cmd);
+    };
+
+    let cfg = crate::onecli::fetch_container_config(&gateway_url, gate_agent)
+        .map_err(|e| format!("gate: container-config fetch failed for {gate_agent}: {e}"))?;
+
+    let mut docker_args: Vec<String> = vec!["run".into(), "--rm".into()];
+
+    // Inject proxy env vars (sorted for deterministic docker args).
+    let mut sorted_env: Vec<(&String, &String)> = cfg.env.iter().collect();
+    sorted_env.sort_by_key(|(k, _)| k.as_str());
+    for (k, v) in &sorted_env {
+        docker_args.push("--env".into());
+        docker_args.push(format!("{k}={v}"));
+    }
+
+    // Write and mount the CA trust anchor when the config provides one.
+    if let (Some(pem), Some(container_path)) =
+        (&cfg.ca_certificate, &cfg.ca_certificate_container_path)
+    {
+        let ca_cert = ca_dir.join("ca.pem");
+        if std::fs::create_dir_all(ca_dir).is_ok() && std::fs::write(&ca_cert, pem).is_ok() {
+            docker_args.push("--volume".into());
+            docker_args.push(format!("{}:{container_path}:ro", ca_cert.display()));
+        }
+    }
+
+    // Override the image's default entrypoint (the Node.js agent runner) so the
+    // gate command runs under plain sh rather than as arguments to the agent.
+    docker_args.push("--entrypoint".into());
+    docker_args.push("sh".into());
+    docker_args.push(image.into());
+    docker_args.push("-c".into());
+    docker_args.push(cmd.into());
+
+    let output = std::process::Command::new("docker")
+        .args(&docker_args)
+        .output()
+        .map_err(|e| format!("docker run gate: {e}"))?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_trimmed = stderr.trim();
+    if !output.status.success() {
+        eprintln!(
+            "scheduler: gate container for agent {gate_agent} exited {:?}; stderr: {}",
+            output.status.code(),
+            stderr_trimmed,
+        );
+        return Ok(GateOutcome::Skip);
+    }
+    if !stderr_trimmed.is_empty() {
+        eprintln!("scheduler: gate container stderr (agent={gate_agent}): {stderr_trimmed}");
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        Ok(GateOutcome::Skip)
+    } else {
+        Ok(GateOutcome::Fire(Some(stdout)))
+    }
+}
+
+/// The session id used for all standing-task turns. A single dedicated session
+/// keeps standing-task messages separate from user conversations.
+const STANDING_SESSION_ID: &str = "standing";
+
+/// Idempotently create any standing tasks not yet present in the central DB
+/// projection. Called once at serve-slack startup after the specialist list is
+/// resolved. Each task fires into the orchestrator's `standing` session; the
+/// session directory is created lazily on first sweep by `ensure_spawned`.
+///
+/// The second element of each tuple is the OneCLI agent that should run the
+/// gate command inside a container (`Some("agent-name")`), or `None` to run it
+/// as a raw host subprocess. For specialist standing tasks this should be the
+/// specialist's `onecli_agent`; for product-level tasks `None` is fine.
+///
+/// Already-existing tasks (any status, including operator-cancelled) are skipped.
+/// Changing a task's `id` field orphans the old item and creates a new one.
+pub fn ensure_standing_tasks(
+    conn: &Connection,
+    agent_group_id: i64,
+    now: i64,
+    tasks: &[(StandingTask, Option<String>)],
+) -> Result<(), HostError> {
+    for (task, gate_onecli_agent) in tasks {
+        let intent = ScheduleIntent {
+            created_by: task.id.clone(),
+            summary: task.summary.clone(),
+            created_at: 0,
+        };
+        let id = generate_scheduled_item_id(agent_group_id, &intent);
+        if item_status(conn, &id).map_err(|e| HostError::Db(e.to_string()))?.is_some() {
+            continue;
+        }
+        let mut meta = ScheduledMessageMeta::create(
+            agent_group_id,
+            intent,
+            now,
+            Some(Recurrence::Every { seconds: task.interval_secs as i64 }),
+            ContextPolicy::CurrentMemory,
+        )
+        .map_err(|e| HostError::Db(e.to_string()))?;
+        meta.gate_command = task.gate_command.clone();
+        meta.gate_onecli_agent = gate_onecli_agent.clone();
+        upsert_item(conn, &meta, Some(STANDING_SESSION_ID))
+            .map_err(|e| HostError::Db(e.to_string()))?;
+        eprintln!("scheduler: registered standing task {:?} ({})", task.id, meta.scheduled_item_id);
+    }
+    Ok(())
 }
 
 /// Render an agent group's live scheduled items (active and paused) as a
@@ -441,5 +576,95 @@ mod tests {
         let block = render_schedules_block(&conn, 1, 1_000, 1).unwrap();
         assert!(block.contains(&format!("id={soon}")));
         assert!(!block.contains("\"later\""), "cap must drop the later item");
+    }
+
+    #[test]
+    fn ensure_standing_tasks_creates_new_and_skips_existing() {
+        let conn = central();
+        let task = StandingTask {
+            id: "jira-sync".to_string(),
+            summary: "Sync the Jira board".to_string(),
+            interval_secs: 600,
+            gate_command: None,
+        };
+
+        // First call: task does not exist yet → created.
+        ensure_standing_tasks(&conn, 1, 1_000, &[(task.clone(), None)]).unwrap();
+        let items = assistant_scheduler::list_items(&conn, 1, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].intent, "Sync the Jira board");
+        assert_eq!(items[0].session_id.as_deref(), Some(STANDING_SESSION_ID));
+
+        // Second call: idempotent — same task already in DB, not duplicated.
+        ensure_standing_tasks(&conn, 1, 2_000, &[(task.clone(), None)]).unwrap();
+        let items = assistant_scheduler::list_items(&conn, 1, None).unwrap();
+        assert_eq!(items.len(), 1, "must not duplicate an existing standing task");
+    }
+
+    #[test]
+    fn ensure_standing_tasks_sets_gate_command_and_recurrence() {
+        let conn = central();
+        let task = StandingTask {
+            id: "board-sync".to_string(),
+            summary: "Board sync".to_string(),
+            interval_secs: 300,
+            gate_command: Some("check-gate.sh".to_string()),
+        };
+
+        ensure_standing_tasks(&conn, 1, 1_000, &[(task, None)]).unwrap();
+        let items = assistant_scheduler::list_items(&conn, 1, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].gate_command.as_deref(), Some("check-gate.sh"));
+        assert!(
+            matches!(items[0].recurrence, Some(Recurrence::Every { seconds: 300 })),
+            "recurrence should be Every 300s"
+        );
+    }
+
+    #[test]
+    fn ensure_standing_tasks_stores_gate_onecli_agent() {
+        let conn = central();
+        let task = StandingTask {
+            id: "board-sync-agent".to_string(),
+            summary: "Board sync with agent gate".to_string(),
+            interval_secs: 300,
+            gate_command: Some("python3 -c 'print(1)'".to_string()),
+        };
+
+        ensure_standing_tasks(
+            &conn,
+            1,
+            1_000,
+            &[(task, Some("my-specialist-agent".to_string()))],
+        )
+        .unwrap();
+        let items = assistant_scheduler::list_items(&conn, 1, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].gate_onecli_agent.as_deref(),
+            Some("my-specialist-agent")
+        );
+    }
+
+    #[test]
+    fn ensure_standing_tasks_skips_cancelled_task() {
+        let conn = central();
+        let task = StandingTask {
+            id: "jira-sync".to_string(),
+            summary: "Sync the Jira board".to_string(),
+            interval_secs: 600,
+            gate_command: None,
+        };
+
+        // Create and then cancel it (simulates operator cancellation).
+        ensure_standing_tasks(&conn, 1, 1_000, &[(task.clone(), None)]).unwrap();
+        let items = assistant_scheduler::list_items(&conn, 1, None).unwrap();
+        assistant_scheduler::cancel_item(&conn, &items[0].id).unwrap();
+
+        // Re-registering does not resurrect it.
+        ensure_standing_tasks(&conn, 1, 2_000, &[(task, None)]).unwrap();
+        let all = assistant_scheduler::list_items(&conn, 1, None).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].status, assistant_scheduler::ScheduleStatus::Cancelled);
     }
 }

@@ -71,6 +71,31 @@ pub struct SpecialistSpec {
     /// rather than sharing the orchestrator's identity. Required: every specialist
     /// must declare its own identity so credential scoping is always explicit.
     pub onecli_agent: String,
+    /// Recurring tasks the host creates when this specialist is registered.
+    /// Each fires into the orchestrator's `standing` session so the orchestrator
+    /// can delegate back to this specialist. Idempotent: already-created tasks
+    /// (any status) are never recreated, even if the specialist is re-registered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub standing_tasks: Vec<StandingTask>,
+}
+
+/// A recurring task that fires automatically into the orchestrator on the
+/// declared interval. Declared in a [`SpecialistSpec`]'s `standing_tasks` (or at
+/// the product level); the host creates the schedule on startup, idempotently.
+/// Once created, the task is never recreated — even if cancelled by the operator.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StandingTask {
+    /// Stable slug used as the idempotency key (e.g. `"jira-board-sync"`).
+    /// Changing this slug orphans the old item and creates a new one.
+    pub id: String,
+    /// Turn content fired into the orchestrator when this task is due.
+    pub summary: String,
+    /// How often to fire, in seconds (e.g. `600` for every 10 minutes).
+    pub interval_secs: u64,
+    /// Optional host-side gate command. Empty stdout or non-zero exit skips
+    /// the turn (advances the schedule without inference).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_command: Option<String>,
 }
 
 /// A `{ name, description }` pair the host hands the orchestrator (as JSON in
@@ -119,6 +144,7 @@ mod tests {
             max_turns: 40,
             extra_env: vec![],
             onecli_agent: "test-agent-browser".to_string(),
+            standing_tasks: vec![],
         }
     }
 

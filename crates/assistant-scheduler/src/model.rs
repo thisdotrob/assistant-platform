@@ -408,12 +408,16 @@ pub struct ScheduledMessageMeta {
     /// The highest occurrence sequence allocated so far (0 before the first).
     #[serde(default)]
     pub occurrence_seq: u64,
-    /// Optional shell command run on the host before each scheduled turn fires.
-    /// A non-zero exit or empty stdout skips the turn (advances the schedule
-    /// without inference). Non-empty stdout is injected as the turn's metadata
-    /// context. `None` disables the gate.
+    /// Optional shell command run before each scheduled turn fires. Empty stdout
+    /// or non-zero exit skips the turn; non-empty stdout is injected as metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate_command: Option<String>,
+    /// OneCLI agent identity for running the gate command inside a container.
+    /// When set the gate runs in a `docker run --rm` container with the agent's
+    /// proxy env and CA cert injected, mirroring a normal turn. `None` falls
+    /// back to running the gate as a raw host subprocess.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_onecli_agent: Option<String>,
 }
 
 impl ScheduledMessageMeta {
@@ -449,6 +453,7 @@ impl ScheduledMessageMeta {
             revisions: vec![revision],
             occurrence_seq: 0,
             gate_command: None,
+            gate_onecli_agent: None,
         })
     }
 
