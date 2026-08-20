@@ -35,9 +35,6 @@ import { query, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 
 import { buildAssistantTools } from './assistant-tools.js';
 
-// Bound a multi-step turn so a stuck or looping specialist can't burn unbounded
-// API calls; the host's turn timeout is the wall-clock backstop on top of this.
-const DEFAULT_MAX_TURNS = 40;
 
 // Parse a JSON array of strings from an env var, tolerating absence and malformed
 // values by returning the fallback — the harness must never crash on a bad spec
@@ -86,10 +83,15 @@ export function specialistOptionsFromEnv(env) {
   const allowedTools = jsonStringArray(env.ASSISTANT_SPECIALIST_ALLOWED_TOOLS, []);
   const mcpTools = jsonStringArray(env.ASSISTANT_SPECIALIST_MCP_TOOLS, []);
   const destinations = jsonDestinations(env.ASSISTANT_SPECIALIST_DESTINATIONS);
+  // A positive ASSISTANT_SPECIALIST_MAX_TURNS caps the agentic loop. 0 / unset /
+  // invalid means NO turn cap: `maxTurns` is omitted from the query entirely (as
+  // the orchestrator path already does), so the SDK runs until the agent finishes
+  // rather than tripping a counter. The turn's wall-clock timeout + heartbeat are
+  // then the real bounds.
   const parsedMaxTurns = Number.parseInt(env.ASSISTANT_SPECIALIST_MAX_TURNS ?? '', 10);
   const maxTurns = Number.isInteger(parsedMaxTurns) && parsedMaxTurns > 0
     ? parsedMaxTurns
-    : DEFAULT_MAX_TURNS;
+    : undefined;
   return { systemPrompt, tools, allowedTools, mcpTools, destinations, maxTurns };
 }
 
@@ -166,24 +168,24 @@ export async function runSpecialistTurn(goal, memory, history) {
   }
   const prompt = parts.join('\n\n');
 
-  const q = query({
-    prompt,
-    options: {
-      systemPrompt,
-      // MCP servers from the image's mcp.json (credentials injected by the
-      // OneCLI proxy, not carried here) merged with the in-process `assistant`
-      // server carrying the scheduling / send_message tools the spec enabled.
-      mcpServers,
-      // Enable only the host-declared built-in tools and auto-approve the
-      // host-declared patterns plus the enabled assistant tools. With dontAsk the
-      // turn never hangs on a permission prompt; anything else is denied.
-      tools,
-      allowedTools: [...allowedTools, ...allowedToolNames],
-      permissionMode: 'dontAsk',
-      maxTurns,
-      env: { ...process.env },
-    },
-  });
+  const options = {
+    systemPrompt,
+    // MCP servers from the image's mcp.json (credentials injected by the
+    // OneCLI proxy, not carried here) merged with the in-process `assistant`
+    // server carrying the scheduling / send_message tools the spec enabled.
+    mcpServers,
+    // Enable only the host-declared built-in tools and auto-approve the
+    // host-declared patterns plus the enabled assistant tools. With dontAsk the
+    // turn never hangs on a permission prompt; anything else is denied.
+    tools,
+    allowedTools: [...allowedTools, ...allowedToolNames],
+    permissionMode: 'dontAsk',
+    env: { ...process.env },
+  };
+  // Only cap the agentic loop when a positive max_turns was configured; otherwise
+  // omit maxTurns so the SDK is unbounded by turn count (matching the orchestrator).
+  if (maxTurns !== undefined) options.maxTurns = maxTurns;
+  const q = query({ prompt, options });
 
   // Collect the model's text the same way the orchestrator path does: one turn
   // can emit several assistant messages (text before a tool call, text after the

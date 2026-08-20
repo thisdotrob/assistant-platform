@@ -56,11 +56,12 @@ test('drops malformed destinations (missing name/description)', () => {
   assert.deepEqual(opts.destinations, [{ name: 'ok', description: 'fine' }]);
 });
 
-test('defaults max turns to 40 when absent or not a positive integer', () => {
-  assert.equal(specialistOptionsFromEnv({}).maxTurns, 40);
-  assert.equal(specialistOptionsFromEnv({ ASSISTANT_SPECIALIST_MAX_TURNS: 'nope' }).maxTurns, 40);
-  assert.equal(specialistOptionsFromEnv({ ASSISTANT_SPECIALIST_MAX_TURNS: '0' }).maxTurns, 40);
-  assert.equal(specialistOptionsFromEnv({ ASSISTANT_SPECIALIST_MAX_TURNS: '-3' }).maxTurns, 40);
+test('no turn cap (undefined) when absent or not a positive integer', () => {
+  // undefined => the query omits maxTurns entirely (unbounded by turn count).
+  assert.equal(specialistOptionsFromEnv({}).maxTurns, undefined);
+  assert.equal(specialistOptionsFromEnv({ ASSISTANT_SPECIALIST_MAX_TURNS: 'nope' }).maxTurns, undefined);
+  assert.equal(specialistOptionsFromEnv({ ASSISTANT_SPECIALIST_MAX_TURNS: '0' }).maxTurns, undefined);
+  assert.equal(specialistOptionsFromEnv({ ASSISTANT_SPECIALIST_MAX_TURNS: '-3' }).maxTurns, undefined);
 });
 
 test('falls back to empty lists for malformed or non-array tool JSON', () => {
