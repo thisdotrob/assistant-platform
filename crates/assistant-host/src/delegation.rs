@@ -42,7 +42,7 @@ use assistant_agent_graph::{
     RegisteredProfile, RetentionLabel, SpecialistJob, SpecialistRegistry, SpecialistResult,
     SpecialistStatus,
 };
-use assistant_runtime_docker::{ContainerRuntime, ImageRef, RunnerAuthMode};
+use assistant_runtime_docker::{ContainerRuntime, ImageRef, LifecyclePolicy, RunnerAuthMode};
 use assistant_session::{InboundMessage, SessionLayout};
 use assistant_specialist_spec::SpecialistSpec;
 
@@ -333,7 +333,15 @@ pub(crate) fn agent_host_config(
     // per-turn deadline well above the host default; such turns run in the
     // background so the long wall-clock never blocks the serve loop.
     if let Some(secs) = spec.turn_timeout_secs {
-        config.turn_timeout = std::time::Duration::from_secs(secs);
+        let timeout = std::time::Duration::from_secs(secs);
+        config.turn_timeout = timeout;
+        // The shim refreshes the heartbeat only between turns, so a single long
+        // implementation turn (clone the monorepo, build, test) would otherwise
+        // trip the default 300s heartbeat-staleness reaper and be killed mid-work
+        // long before its turn deadline (observed: GP-589 reaped at exactly 5m
+        // after flipping to In Progress). Let staleness track the turn deadline so
+        // the reaper only fires once the turn itself has timed out.
+        config.policy = LifecyclePolicy::new(config.policy.idle_after.min(timeout), timeout);
     }
     // Each specialist gets its own persistent workspace under the instance root,
     // keyed by group_slug (stable across delegation runs). Derived from
