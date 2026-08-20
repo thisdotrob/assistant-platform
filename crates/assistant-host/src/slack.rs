@@ -168,8 +168,29 @@ pub(crate) const ORCHESTRATOR_DESTINATION: &str = "orchestrator";
 /// reporting agent's session so each agent gets a stable orchestrator
 /// conversation thread. It runs the orchestrator (not a specialist), so the
 /// orchestrator can reason over the report and post to a channel of its choosing.
-fn orchestrator_relay_session(source_session_id: &str) -> String {
-    format!("a2a-orchestrator-{source_session_id}")
+fn orchestrator_relay_session(conversation_root: &str) -> String {
+    format!("a2a-orchestrator-{conversation_root}")
+}
+
+/// The stable conversation root of a session id: strip any leading
+/// `a2a-<agent>-` relay prefixes so a multi-hop A2A exchange reuses one session
+/// per `(target, root)` pair instead of nesting the whole chain into an
+/// ever-growing id (e.g. `a2a-orchestrator-a2a-se-a2a-orchestrator-standing`).
+/// `agents` is the set of routable agent names (specialists + the orchestrator)
+/// so a route name containing a `-` is stripped as a whole, not split.
+fn conversation_root<'a>(session_id: &'a str, agents: &[String]) -> &'a str {
+    let mut root = session_id;
+    while let Some(rest) = root.strip_prefix("a2a-") {
+        match agents
+            .iter()
+            .filter_map(|a| rest.strip_prefix(a.as_str()))
+            .find_map(|r| r.strip_prefix('-'))
+        {
+            Some(inner) => root = inner,
+            None => break,
+        }
+    }
+    root
 }
 
 /// A finished background specialist job, reported from a worker thread back to
@@ -1437,13 +1458,25 @@ fn route_send_message<A, R, F>(
         }
     };
 
+    // Normalise the sender's session to its conversation root, so a multi-hop
+    // exchange reuses one stable session per (target, root) instead of nesting the
+    // whole chain into an ever-growing session id. Routing is by the explicit
+    // `to`, so the sender label / return path are unaffected.
+    let agents: Vec<String> = opts
+        .specialists
+        .iter()
+        .map(|s| s.route_name.clone())
+        .chain(std::iter::once(ORCHESTRATOR_DESTINATION.to_string()))
+        .collect();
+    let root = conversation_root(source_session_id, &agents);
+
     // Report to the orchestrator: run an orchestrator turn over the report and let
     // IT decide whether/where to post. The relay session runs the orchestrator
     // (base config, via `host_for`), not a specialist; its own `send_message`
     // replies (to a channel id) are what actually post — handled by recursing with
     // `sender_is_slack_wired = true`.
     if msg.to == ORCHESTRATOR_DESTINATION {
-        let relay = orchestrator_relay_session(source_session_id);
+        let relay = orchestrator_relay_session(root);
         let inbound = InboundMessage {
             sender: format!("agent:{source_session_id}"),
             content: msg.text,
@@ -1492,7 +1525,7 @@ fn route_send_message<A, R, F>(
 
     // Agent-to-agent: run the named specialist over a dedicated a2a session.
     if let Some(spec) = opts.specialists.iter().find(|s| s.route_name == msg.to) {
-        let a2a_session = format!("a2a-{}-{}", spec.route_name, source_session_id);
+        let a2a_session = format!("a2a-{}-{}", spec.route_name, root);
         let layout = match session_layout(opts, &a2a_session) {
             Ok(layout) => layout,
             Err(err) => {
@@ -1916,5 +1949,39 @@ mod live {
         let mut channel = SlackChannel::via_proxy(injection.clone());
         let mut opener = TungsteniteOpener::via_proxy(injection);
         serve_slack(&mut opener, &mut channel, opts, DockerCliRuntime::new, stop)
+    }
+}
+
+#[cfg(test)]
+mod a2a_tests {
+    use super::conversation_root;
+
+    fn agents() -> Vec<String> {
+        ["se", "ax", "orchestrator"].iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn conversation_root_collapses_nested_a2a_prefixes() {
+        let a = agents();
+        // A base (non-a2a) session is its own root.
+        assert_eq!(conversation_root("standing", &a), "standing");
+        assert_eq!(conversation_root("D0BMLE47SFP", &a), "D0BMLE47SFP");
+        // One and many nested hops both collapse to the base root.
+        assert_eq!(conversation_root("a2a-orchestrator-standing", &a), "standing");
+        assert_eq!(
+            conversation_root("a2a-orchestrator-a2a-se-a2a-orchestrator-standing", &a),
+            "standing"
+        );
+        // The two directions of a conversation therefore reuse two STABLE sessions
+        // (a2a-orchestrator-<root> and a2a-se-<root>), never growing.
+        let se_to_orch = format!("a2a-orchestrator-{}", conversation_root("a2a-se-standing", &a));
+        assert_eq!(se_to_orch, "a2a-orchestrator-standing");
+    }
+
+    #[test]
+    fn conversation_root_leaves_unknown_prefixes_intact() {
+        let a = agents();
+        // `a2a-` followed by an unknown agent isn't stripped (nothing to collapse).
+        assert_eq!(conversation_root("a2a-mystery-standing", &a), "a2a-mystery-standing");
     }
 }
