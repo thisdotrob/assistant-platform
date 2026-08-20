@@ -77,6 +77,11 @@ pub struct HostConfig {
     /// into the container at `/workspace`. `None` disables the workspace mount
     /// (offline/test paths that don't need persistence).
     pub workspace_dir: Option<PathBuf>,
+    /// Raw `docker --volume` specs mounted into the container (e.g. a shared
+    /// named volume such as the board DB, `board:/data`). Empty by default; a
+    /// specialist opts in via its spec so its work-turns can reach state the
+    /// gate step also uses (e.g. to record a PR against the board).
+    pub extra_volumes: Vec<String>,
 }
 
 /// Where and how a turn loads its pre-reply memory context. The catalog table
@@ -128,6 +133,7 @@ impl HostConfig {
             memory: None,
             extra_env: Vec::new(),
             workspace_dir: None,
+            extra_volumes: Vec::new(),
         }
     }
 
@@ -360,6 +366,10 @@ where
             // path the gateway now injects (an API key can't be presented as an
             // OAuth Bearer token).
         }
+        // Raw named-volume mounts the agent opted into (e.g. the shared board DB
+        // a work-turn writes its PR record into, which the gate step also uses).
+        spec.volumes
+            .extend(self.config.extra_volumes.iter().cloned());
         // Caller-supplied env (e.g. the specialist's network policy) is appended
         // last so it travels into the container alongside the auth/gateway env.
         spec.env

@@ -130,6 +130,7 @@ mod tests {
             image: crate::image::ImageRef::new("assistant-base", "0.1.0"),
             mounts: Vec::new(),
             env: Vec::new(),
+            volumes: Vec::new(),
         };
         assert!(matches!(runtime.spawn(&spec), Err(DockerCliError::Launch(_))));
         assert!(matches!(

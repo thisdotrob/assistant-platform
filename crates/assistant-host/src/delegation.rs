@@ -351,6 +351,9 @@ pub(crate) fn agent_host_config(
         config = config.with_workspace(workspace_dir);
     }
     config.extra_env = spec.extra_env.clone();
+    // Raw named-volume mounts (e.g. the shared board DB) the specialist's
+    // turn containers get, so a work-turn can record state the gate also reads.
+    config.extra_volumes = spec.volumes.clone();
     config.extra_env.extend([
         (
             "ASSISTANT_SPECIALIST_SYSTEM_PROMPT".to_string(),

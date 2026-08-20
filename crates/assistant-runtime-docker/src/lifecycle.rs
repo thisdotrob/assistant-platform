@@ -54,6 +54,11 @@ pub struct SpawnSpec {
     pub image: ImageRef,
     pub mounts: Vec<Mount>,
     pub env: Vec<(String, String)>,
+    /// Raw `docker --volume` specs (e.g. a named volume `board:/data`) appended
+    /// after the bind mounts. Named volumes don't fit the host-path [`Mount`]
+    /// abstraction (and its allowlist), so callers set these directly after
+    /// `prepare_spawn`, the same way the OneCLI gateway env is applied.
+    pub volumes: Vec<String>,
 }
 
 /// Prepare a spawn: gate the session schema, validate mounts against the
@@ -78,6 +83,7 @@ pub fn prepare_spawn(
         image,
         mounts,
         env,
+        volumes: Vec::new(),
     })
 }
 
@@ -106,6 +112,11 @@ pub fn docker_run_args(spec: &SpawnSpec) -> Vec<String> {
         }
         args.push("--mount".to_string());
         args.push(spec_str);
+    }
+    // Raw named-volume mounts (e.g. the shared board DB), after the bind mounts.
+    for volume in &spec.volumes {
+        args.push("--volume".to_string());
+        args.push(volume.clone());
     }
     for (key, value) in &spec.env {
         args.push("--env".to_string());
@@ -337,6 +348,32 @@ mod tests {
         assert!(joined.contains(&format!("{OAUTH_TOKEN_ENV}=")));
         assert!(!joined.contains("real-token"));
         // Image reference is last.
+        assert_eq!(args.last().unwrap(), "assistant-base:0.1.0");
+    }
+
+    #[test]
+    fn docker_args_emit_named_volumes_after_mounts_before_image() {
+        let mut spec = prepare_spawn(
+            "sess-1",
+            ImageRef::new("assistant-base", "0.1.0"),
+            build_session_mounts(&session(), None),
+            &[PathBuf::from("/data")],
+            2,
+            SchemaRange::new(1, 2),
+            RunnerAuthMode::Stub,
+            ready(),
+        )
+        .unwrap();
+        spec.volumes = vec!["board:/data".to_string(), "cache:/c:ro".to_string()];
+        let args = docker_run_args(&spec);
+
+        // Each opted-in volume is a `--volume <spec>` pair, verbatim.
+        for want in ["board:/data", "cache:/c:ro"] {
+            let i = args.iter().position(|a| a == want).expect("volume present");
+            assert_eq!(args[i - 1], "--volume");
+            // ...and it comes before the trailing image reference.
+            assert!(i < args.len() - 1);
+        }
         assert_eq!(args.last().unwrap(), "assistant-base:0.1.0");
     }
 

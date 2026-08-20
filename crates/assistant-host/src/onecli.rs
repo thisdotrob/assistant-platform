@@ -385,6 +385,7 @@ mod tests {
             image: ImageRef::new("assistant-base", "0.1.0"),
             mounts: Vec::new(),
             env: Vec::new(),
+            volumes: Vec::new(),
         }
     }
 

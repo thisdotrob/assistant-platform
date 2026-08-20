@@ -78,6 +78,13 @@ pub struct SpecialistSpec {
     /// container, for any in-image tooling the specialist reads (the host adds the
     /// generic `ASSISTANT_SPECIALIST_*` turn-config vars on top of these).
     pub extra_env: Vec<(String, String)>,
+    /// Raw `docker --volume` specs (`source:target[:options]`) mounted into this
+    /// specialist's turn containers — e.g. a shared named volume the gate step
+    /// also uses (the board DB), so a work-turn can record state (like a PR)
+    /// against it. Named volumes and bind mounts are both accepted. Empty by
+    /// default (an ordinary specialist needs no shared volumes).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<String>,
     /// The OneCLI agent identity this specialist's containers authenticate as.
     /// The host queries `GET /api/container-config?agent=<onecli_agent>` when
     /// spawning the specialist's container, giving it its own scoped credentials
