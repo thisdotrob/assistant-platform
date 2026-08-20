@@ -331,9 +331,10 @@ mod tests {
             .unwrap();
         assert!(!outbound.contains("readonly"));
 
-        // Only the placeholder token, never a raw token, appears in args.
-        assert!(joined.contains(&format!("{OAUTH_TOKEN_ENV}=placeholder")));
-        assert!(joined.contains(&format!("{ANTHROPIC_API_KEY_ENV}=")));
+        // Only the placeholder API key, never a raw token, appears in args; the
+        // OAuth token env is present but cleared (empty).
+        assert!(joined.contains(&format!("{ANTHROPIC_API_KEY_ENV}=placeholder")));
+        assert!(joined.contains(&format!("{OAUTH_TOKEN_ENV}=")));
         assert!(!joined.contains("real-token"));
         // Image reference is last.
         assert_eq!(args.last().unwrap(), "assistant-base:0.1.0");

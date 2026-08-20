@@ -418,6 +418,20 @@ pub struct ScheduledMessageMeta {
     /// back to running the gate as a raw host subprocess.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate_onecli_agent: Option<String>,
+    /// Docker volume mounts (`source:target` strings) added as `-v` flags when
+    /// the gate runs in a container. Empty outside container-gated tasks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gate_volumes: Vec<String>,
+    /// Container image override for gate container runs. `None` uses the host's
+    /// base image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_image: Option<String>,
+    /// The agent (by `route_name`) that this item's turn runs as. `None` runs the
+    /// turn as the orchestrator (the historical behaviour). When set, the
+    /// scheduler builds that agent's container config and fires the turn as that
+    /// agent, so a schedule-capable specialist runs its own recurring/one-off work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_as: Option<String>,
 }
 
 impl ScheduledMessageMeta {
@@ -454,6 +468,9 @@ impl ScheduledMessageMeta {
             occurrence_seq: 0,
             gate_command: None,
             gate_onecli_agent: None,
+            gate_volumes: Vec::new(),
+            gate_image: None,
+            run_as: None,
         })
     }
 

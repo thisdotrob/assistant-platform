@@ -159,6 +159,7 @@ mod tests {
             extra_env: vec![],
             onecli_agent: "test-agent-browser".to_string(),
             standing_tasks: vec![],
+            ..Default::default()
         }
     }
 

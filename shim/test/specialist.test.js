@@ -27,6 +27,33 @@ test('defaults a missing system prompt to empty and missing tool lists to empty'
   assert.equal(opts.systemPrompt, '');
   assert.deepEqual(opts.tools, []);
   assert.deepEqual(opts.allowedTools, []);
+  assert.deepEqual(opts.mcpTools, []);
+  assert.deepEqual(opts.destinations, []);
+});
+
+test('reads assistant MCP tools and send_message destinations from env', () => {
+  const opts = specialistOptionsFromEnv({
+    ASSISTANT_SPECIALIST_MCP_TOOLS: JSON.stringify(['schedule_message', 'send_message']),
+    ASSISTANT_SPECIALIST_DESTINATIONS: JSON.stringify([
+      { name: 'orchestrator', description: 'the Slack-wired agent' },
+    ]),
+  });
+  assert.deepEqual(opts.mcpTools, ['schedule_message', 'send_message']);
+  assert.deepEqual(opts.destinations, [
+    { name: 'orchestrator', description: 'the Slack-wired agent' },
+  ]);
+});
+
+test('drops malformed destinations (missing name/description)', () => {
+  const opts = specialistOptionsFromEnv({
+    ASSISTANT_SPECIALIST_DESTINATIONS: JSON.stringify([
+      { name: 'ok', description: 'fine' },
+      { name: 'no-desc' },
+      { description: 'no-name' },
+      'garbage',
+    ]),
+  });
+  assert.deepEqual(opts.destinations, [{ name: 'ok', description: 'fine' }]);
 });
 
 test('defaults max turns to 40 when absent or not a positive integer', () => {

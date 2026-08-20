@@ -271,27 +271,43 @@ pub(crate) fn finish_specialist(
 /// `Running` (see [`begin_specialist`]) and is terminalized later by
 /// [`finish_specialist`]. The error is already a `String`, so the returned
 /// outcome is `Send` and can travel back to the serve thread over a channel.
-pub(crate) fn run_specialist_turn<R, F>(
+/// Build the per-turn [`HostConfig`] for running `spec`'s agent in a container:
+/// its custom image, credentialed auth mode, own OneCLI identity, no orchestrator
+/// memory injection, a stable per-group workspace, and the generic
+/// `ASSISTANT_SPECIALIST_*` turn config the shim harness reads. Shared by the
+/// delegation path ([`run_specialist_turn`]) and the scheduler's `run_as` path
+/// (a scheduled item that runs as a named agent rather than the orchestrator), so
+/// both produce byte-identical container configuration for the same spec.
+pub(crate) fn agent_host_config(
     base_config: &HostConfig,
-    sessions_dir: &Path,
     spec: &SpecialistSpec,
-    runtime_factory: &F,
-    job_id: &str,
-    packet: &HandoffPacket,
-) -> Result<(String, Option<String>), String>
-where
-    R: ContainerRuntime,
-    R::Error: std::fmt::Display,
-    F: Fn() -> R,
-{
-    let layout = SessionLayout::derive(sessions_dir, &spec.group_slug, job_id)
-        .map_err(|e| format!("deriving the specialist session failed: {e}"))?;
-
-    // Turn config the generic shim harness reads from the container env.
+    sessions_dir: &Path,
+) -> Result<HostConfig, String> {
     let tools_json = serde_json::to_string(&spec.tools)
         .map_err(|e| format!("serializing the specialist tools failed: {e}"))?;
     let allowed_tools_json = serde_json::to_string(&spec.allowed_tools)
         .map_err(|e| format!("serializing the specialist allowed-tools failed: {e}"))?;
+    let mcp_tools_json = serde_json::to_string(&spec.mcp_tools)
+        .map_err(|e| format!("serializing the specialist MCP tools failed: {e}"))?;
+    // The `send_message` destination menu the shim shows the model: each declared
+    // destination name plus a short description. Peer descriptions aren't resolved
+    // here (this builder sees only one spec), so a generic hint is used; the
+    // orchestrator destination gets a human-facing hint.
+    let destination_entries: Vec<serde_json::Value> = spec
+        .destinations
+        .iter()
+        .map(|name| {
+            let description = if name == "orchestrator" {
+                "the human-facing orchestrator; send here to report a result or reach the human"
+                    .to_string()
+            } else {
+                format!("the {name} agent")
+            };
+            serde_json::json!({ "name": name, "description": description })
+        })
+        .collect();
+    let destinations_json = serde_json::to_string(&destination_entries)
+        .map_err(|e| format!("serializing the specialist destinations failed: {e}"))?;
 
     // The specialist runs its own custom image (carrying the binaries it needs),
     // its own auth mode, and no orchestrator memory injection; mounts and cadence
@@ -313,6 +329,12 @@ where
     };
     config.onecli_agent = spec.onecli_agent.clone();
     config.memory = None;
+    // Long-running agents (e.g. an SE agent implementing an issue) raise the
+    // per-turn deadline well above the host default; such turns run in the
+    // background so the long wall-clock never blocks the serve loop.
+    if let Some(secs) = spec.turn_timeout_secs {
+        config.turn_timeout = std::time::Duration::from_secs(secs);
+    }
     // Each specialist gets its own persistent workspace under the instance root,
     // keyed by group_slug (stable across delegation runs). Derived from
     // sessions_dir's parent (the instance root: sessions_dir = <root>/sessions/).
@@ -328,11 +350,33 @@ where
         ),
         ("ASSISTANT_SPECIALIST_TOOLS".to_string(), tools_json),
         ("ASSISTANT_SPECIALIST_ALLOWED_TOOLS".to_string(), allowed_tools_json),
+        ("ASSISTANT_SPECIALIST_MCP_TOOLS".to_string(), mcp_tools_json),
+        ("ASSISTANT_SPECIALIST_DESTINATIONS".to_string(), destinations_json),
         (
             "ASSISTANT_SPECIALIST_MAX_TURNS".to_string(),
             spec.max_turns.to_string(),
         ),
     ]);
+    Ok(config)
+}
+
+pub(crate) fn run_specialist_turn<R, F>(
+    base_config: &HostConfig,
+    sessions_dir: &Path,
+    spec: &SpecialistSpec,
+    runtime_factory: &F,
+    job_id: &str,
+    packet: &HandoffPacket,
+) -> Result<(String, Option<String>), String>
+where
+    R: ContainerRuntime,
+    R::Error: std::fmt::Display,
+    F: Fn() -> R,
+{
+    let layout = SessionLayout::derive(sessions_dir, &spec.group_slug, job_id)
+        .map_err(|e| format!("deriving the specialist session failed: {e}"))?;
+
+    let config = agent_host_config(base_config, spec, sessions_dir)?;
 
     let inbound = InboundMessage {
         sender: ORCHESTRATOR_GROUP.to_string(),

@@ -63,6 +63,7 @@ fn stub_specialist_spec() -> SpecialistSpec {
         extra_env: Vec::new(),
         onecli_agent: "test-orchestrator-browser".to_string(),
         standing_tasks: vec![],
+        ..Default::default()
     }
 }
 

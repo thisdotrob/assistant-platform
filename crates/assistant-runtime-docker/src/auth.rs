@@ -1,10 +1,12 @@
 //! Runner authentication: the stub path and the OneCLI-gated Claude OAuth path.
 //!
-//! The stub runner wakes with no Claude credentials. The Claude OAuth runner
+//! The stub runner wakes with no Claude credentials. The credentialed runner
 //! never receives a raw token: the host applies OneCLI proxy/CA config, OneCLI
-//! holds the `claude setup-token` OAuth token as an Anthropic secret, and the
-//! container is given only `CLAUDE_CODE_OAUTH_TOKEN=placeholder`. OneCLI rewrites
-//! the placeholder on outbound `api.anthropic.com` traffic.
+//! holds the Anthropic API key (`sk-ant-api…`) as an Anthropic secret, and the
+//! container is given only `ANTHROPIC_API_KEY=placeholder` (the `x-api-key` the
+//! SDK sends). OneCLI rewrites the placeholder on outbound `api.anthropic.com`
+//! traffic. (Historically this used a `claude setup-token` OAuth Bearer token in
+//! `CLAUDE_CODE_OAUTH_TOKEN`; the instance now uses a non-personal API key.)
 //!
 //! The hard rule (architecture: Claude SDK authentication): if OneCLI proxy
 //! config, the Anthropic secret, or placeholder injection is not ready, the
@@ -85,10 +87,13 @@ pub fn prepare_runner_env(
 }
 
 /// The OneCLI-gated Claude credential env, shared by every mode that runs a real
-/// Claude turn. Requires readiness; on success injects only the placeholder
-/// token (the proxy swaps it for the real one) and clears `ANTHROPIC_API_KEY` so
-/// no raw OAuth token is ever present in container env. `runner_mode` tags the
-/// row the shim dispatches on.
+/// Claude turn. Requires readiness; on success injects only the placeholder in
+/// `ANTHROPIC_API_KEY` (the proxy swaps it for the real Anthropic API key on
+/// outbound `api.anthropic.com` traffic) and clears `CLAUDE_CODE_OAUTH_TOKEN` so
+/// no raw credential is ever present in container env. The SDK sends the key in
+/// the `x-api-key` header, matching an Anthropic API key (`sk-ant-api…`); OneCLI
+/// holds the real key and rewrites the placeholder. `runner_mode` tags the row
+/// the shim dispatches on.
 fn claude_credentialed_env(
     runner_mode: &str,
     readiness: OneCliReadiness,
@@ -98,8 +103,8 @@ fn claude_credentialed_env(
     }
     Ok(vec![
         (RUNNER_MODE_ENV.to_string(), runner_mode.to_string()),
-        (OAUTH_TOKEN_ENV.to_string(), PLACEHOLDER_TOKEN.to_string()),
-        (ANTHROPIC_API_KEY_ENV.to_string(), String::new()),
+        (ANTHROPIC_API_KEY_ENV.to_string(), PLACEHOLDER_TOKEN.to_string()),
+        (OAUTH_TOKEN_ENV.to_string(), String::new()),
     ])
 }
 
@@ -127,11 +132,11 @@ mod tests {
     fn specialist_is_credentialed_like_oauth_but_tagged_specialist() {
         let env = prepare_runner_env(RunnerAuthMode::Specialist, ready()).unwrap();
         // Same OneCLI placeholder credential surface as ClaudeOAuth: placeholder
-        // token injected, ANTHROPIC_API_KEY cleared, no raw token anywhere.
-        let oauth = env.iter().find(|(k, _)| k == OAUTH_TOKEN_ENV).unwrap();
-        assert_eq!(oauth.1, PLACEHOLDER_TOKEN);
+        // API key injected, OAuth token cleared, no raw token anywhere.
         let api_key = env.iter().find(|(k, _)| k == ANTHROPIC_API_KEY_ENV).unwrap();
-        assert_eq!(api_key.1, "");
+        assert_eq!(api_key.1, PLACEHOLDER_TOKEN);
+        let oauth = env.iter().find(|(k, _)| k == OAUTH_TOKEN_ENV).unwrap();
+        assert_eq!(oauth.1, "");
         // Only the runner-mode tag differs from the orchestrator path.
         let mode = env.iter().find(|(k, _)| k == RUNNER_MODE_ENV).unwrap();
         assert_eq!(mode.1, "specialist");
@@ -162,11 +167,12 @@ mod tests {
     #[test]
     fn claude_oauth_injects_only_placeholder() {
         let env = prepare_runner_env(RunnerAuthMode::ClaudeOAuth, ready()).unwrap();
-        let oauth = env.iter().find(|(k, _)| k == OAUTH_TOKEN_ENV).unwrap();
-        assert_eq!(oauth.1, PLACEHOLDER_TOKEN);
-        // ANTHROPIC_API_KEY explicitly cleared.
+        // API-key mode: placeholder in ANTHROPIC_API_KEY (the x-api-key the SDK
+        // sends), OAuth token explicitly cleared.
         let api_key = env.iter().find(|(k, _)| k == ANTHROPIC_API_KEY_ENV).unwrap();
-        assert_eq!(api_key.1, "");
+        assert_eq!(api_key.1, PLACEHOLDER_TOKEN);
+        let oauth = env.iter().find(|(k, _)| k == OAUTH_TOKEN_ENV).unwrap();
+        assert_eq!(oauth.1, "");
         // No value anywhere is anything but the placeholder.
         assert!(env.iter().all(|(_, v)| v != "real-token"));
     }

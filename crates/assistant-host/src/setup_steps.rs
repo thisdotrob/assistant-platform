@@ -58,6 +58,20 @@ fn domain_migrations() -> MigrationSet {
     set
 }
 
+/// Apply the domain-subsystem central-DB migrations to `central_db_path`,
+/// returning `(applied, skipped)` counts. Idempotent per `(module, version)`, so
+/// calling it when everything is already applied is a no-op. Exposed so the
+/// `serve-slack` startup can self-migrate: unlike `setup`, a plain daemon restart
+/// otherwise never applies a newly shipped migration, leaving the projection
+/// behind the code (e.g. a missing `scheduled_items` column).
+pub fn apply_domain_migrations(
+    central_db_path: &std::path::Path,
+) -> Result<(usize, usize), assistant_db::DbError> {
+    let mut conn = open_central(central_db_path)?;
+    let report = apply(&mut conn, &domain_migrations())?;
+    Ok((report.applied.len(), report.skipped.len()))
+}
+
 /// Apply the domain-subsystem central-DB migrations on top of the M1 baseline.
 fn migrate_domain_db() -> Box<dyn SetupStep> {
     FnStep::new(
@@ -263,14 +277,14 @@ mod tests {
         apply(&mut conn, &baseline_set()).unwrap();
 
         let report = apply(&mut conn, &domain_migrations()).unwrap();
-        // router v2, permissions v2, scheduler v2+v3+v4, memory v2, agent_graph v2 = 7
-        assert_eq!(report.applied.len(), 7);
+        // router v2, permissions v2, scheduler v2..v7 (6), memory v2, agent_graph v2 = 10
+        assert_eq!(report.applied.len(), 10);
 
         let versions = applied_versions(&conn).unwrap();
         for (module, expected_v) in [
             (assistant_router::MODULE_ID, 2),
             (assistant_permissions::MODULE_ID, 2),
-            (assistant_scheduler::MODULE_ID, 4),
+            (assistant_scheduler::MODULE_ID, 7),
             (assistant_memory::MODULE_ID, 2),
             (assistant_agent_graph::MODULE_ID, 2),
         ] {
@@ -280,10 +294,10 @@ mod tests {
             );
         }
 
-        // Idempotent: a second apply skips all seven.
+        // Idempotent: a second apply skips all ten.
         let rerun = apply(&mut conn, &domain_migrations()).unwrap();
         assert!(rerun.applied.is_empty());
-        assert_eq!(rerun.skipped.len(), 7);
+        assert_eq!(rerun.skipped.len(), 10);
     }
 
     /// A layout under a fresh temp home with the instance dirs and a readiness
@@ -325,7 +339,7 @@ mod tests {
         let versions = applied_versions(&conn).unwrap();
         assert!(versions.contains(&(assistant_memory::MODULE_ID.to_string(), 2)));
         assert!(versions.contains(&(assistant_permissions::MODULE_ID.to_string(), 2)));
-        assert!(versions.contains(&(assistant_scheduler::MODULE_ID.to_string(), 4)));
+        assert!(versions.contains(&(assistant_scheduler::MODULE_ID.to_string(), 7)));
         assert!(versions.contains(&(assistant_router::MODULE_ID.to_string(), 2)));
         assert!(versions.contains(&(assistant_agent_graph::MODULE_ID.to_string(), 2)));
     }

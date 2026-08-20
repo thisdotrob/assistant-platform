@@ -211,19 +211,32 @@ fn pump(
             Err(_) => return Ok(()),
         };
         match parse_incoming(&frame) {
-            Incoming::Hello | Incoming::Ignored => {}
-            Incoming::Disconnect { .. } => return Ok(()),
+            Incoming::Hello | Incoming::Ignored => {
+                eprintln!("slack[diag]: frame received -> Hello/Ignored");
+            }
+            Incoming::Disconnect { .. } => {
+                eprintln!("slack[diag]: frame received -> Disconnect (reconnecting)");
+                return Ok(());
+            }
             Incoming::Event { envelope_id, event } => {
+                eprintln!("slack[diag]: frame received -> Event (envelope {envelope_id})");
                 // ACK before any routing so Slack's ~3s window is met even if
                 // the sink is slow.
                 if let Some(err) = ack_or_reconnect(conn, &envelope_id)? {
                     return err;
                 }
-                if let Some(routed) = normalize(&event, identity) {
-                    sink(routed);
+                match normalize(&event, identity) {
+                    Some(routed) => {
+                        eprintln!("slack[diag]: event normalized -> routing to sink");
+                        sink(routed);
+                    }
+                    None => {
+                        eprintln!("slack[diag]: event NOT normalized (self-author/unhandled type) -> dropped silently");
+                    }
                 }
             }
             Incoming::AckOnly { envelope_id } => {
+                eprintln!("slack[diag]: frame received -> AckOnly (envelope {envelope_id})");
                 if let Some(err) = ack_or_reconnect(conn, &envelope_id)? {
                     return err;
                 }

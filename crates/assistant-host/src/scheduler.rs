@@ -107,12 +107,17 @@ where
         let gate_metadata: Option<String>;
         if let Some(gate_cmd) = &item.gate_command {
             let outcome = match &item.gate_onecli_agent {
-                Some(agent) => run_gate_in_container(
-                    gate_cmd,
-                    agent,
-                    &host_config.image.reference(),
-                    &host_config.onecli_ca_dir,
-                ),
+                Some(agent) => {
+                    let default_image = host_config.image.reference();
+                    let image = item.gate_image.as_deref().unwrap_or(&default_image);
+                    run_gate_in_container(
+                        gate_cmd,
+                        agent,
+                        image,
+                        &host_config.onecli_ca_dir,
+                        &item.gate_volumes,
+                    )
+                }
                 None => run_gate(gate_cmd),
             };
             match outcome {
@@ -210,6 +215,7 @@ pub(crate) fn run_gate_in_container(
     gate_agent: &str,
     image: &str,
     ca_dir: &std::path::Path,
+    volumes: &[String],
 ) -> Result<GateOutcome, String> {
     let Some(gateway_url) = crate::onecli::gateway_url() else {
         // No gateway configured (stub / offline mode): fall back to host.
@@ -238,6 +244,22 @@ pub(crate) fn run_gate_in_container(
             docker_args.push("--volume".into());
             docker_args.push(format!("{}:{container_path}:ro", ca_cert.display()));
         }
+    }
+
+    // Task-declared volumes (named volumes or bind mounts for gate state).
+    // Expand a leading `~/` or bare `~` to $HOME so callers can use
+    // tilde-shorthand in the spec without Docker rejecting the path.
+    let home = std::env::var("HOME").unwrap_or_default();
+    for vol in volumes {
+        docker_args.push("--volume".into());
+        let expanded = if vol.starts_with("~/") {
+            format!("{home}/{}", &vol[2..])
+        } else if vol == "~" {
+            home.clone()
+        } else {
+            vol.clone()
+        };
+        docker_args.push(expanded);
     }
 
     // Override the image's default entrypoint (the Node.js agent runner) so the
@@ -316,6 +338,9 @@ pub fn ensure_standing_tasks(
         .map_err(|e| HostError::Db(e.to_string()))?;
         meta.gate_command = task.gate_command.clone();
         meta.gate_onecli_agent = gate_onecli_agent.clone();
+        meta.gate_volumes = task.gate_volumes.clone();
+        meta.gate_image = task.gate_image.clone();
+        meta.run_as = task.run_as.clone();
         upsert_item(conn, &meta, Some(STANDING_SESSION_ID))
             .map_err(|e| HostError::Db(e.to_string()))?;
         eprintln!("scheduler: registered standing task {:?} ({})", task.id, meta.scheduled_item_id);
@@ -586,6 +611,7 @@ mod tests {
             summary: "Sync the Jira board".to_string(),
             interval_secs: 600,
             gate_command: None,
+            ..Default::default()
         };
 
         // First call: task does not exist yet → created.
@@ -609,6 +635,7 @@ mod tests {
             summary: "Board sync".to_string(),
             interval_secs: 300,
             gate_command: Some("check-gate.sh".to_string()),
+            ..Default::default()
         };
 
         ensure_standing_tasks(&conn, 1, 1_000, &[(task, None)]).unwrap();
@@ -629,6 +656,7 @@ mod tests {
             summary: "Board sync with agent gate".to_string(),
             interval_secs: 300,
             gate_command: Some("python3 -c 'print(1)'".to_string()),
+            ..Default::default()
         };
 
         ensure_standing_tasks(
@@ -654,6 +682,7 @@ mod tests {
             summary: "Sync the Jira board".to_string(),
             interval_secs: 600,
             gate_command: None,
+            ..Default::default()
         };
 
         // Create and then cancel it (simulates operator cancellation).

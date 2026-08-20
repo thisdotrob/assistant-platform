@@ -3,7 +3,7 @@
 //! OneCLI (the Agent Vault) is a local HTTPS MITM proxy that injects credentials
 //! into a container's outbound traffic — the container never sees a raw token. On
 //! the Claude OAuth path the container is given only
-//! `CLAUDE_CODE_OAUTH_TOKEN=placeholder`; the gateway rewrites that placeholder to
+//! `ANTHROPIC_API_KEY=placeholder`; the gateway rewrites that placeholder to
 //! the real Anthropic OAuth secret on outbound `api.anthropic.com` traffic.
 //!
 //! Each assistant installation runs its **own** OneCLI gateway (its own stack on its

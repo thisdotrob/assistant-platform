@@ -36,9 +36,23 @@ const SCHEDULER_PROJECTION_V4: &str = "
 ALTER TABLE scheduled_items ADD COLUMN gate_onecli_agent TEXT;
 ";
 
+const SCHEDULER_PROJECTION_V5: &str = "
+ALTER TABLE scheduled_items ADD COLUMN gate_volumes TEXT;
+";
+
+const SCHEDULER_PROJECTION_V6: &str = "
+ALTER TABLE scheduled_items ADD COLUMN gate_image TEXT;
+";
+
+const SCHEDULER_PROJECTION_V7: &str = "
+ALTER TABLE scheduled_items ADD COLUMN run_as TEXT;
+";
+
 /// assistant-scheduler's central-DB migrations beyond the baseline `scheduled_items` /
 /// `scheduled_occurrences` (v1). The lease columns and listing indexes are v2;
-/// the gate command column is v3; the gate OneCLI agent column is v4.
+/// the gate command column is v3; the gate OneCLI agent column is v4;
+/// the gate volumes column is v5; the gate image column is v6; the run-as agent
+/// column is v7.
 pub fn migrations() -> Vec<Migration> {
     vec![
         Migration::new(
@@ -58,6 +72,24 @@ pub fn migrations() -> Vec<Migration> {
             4,
             "scheduled_projection_gate_onecli_agent",
             SCHEDULER_PROJECTION_V4,
+        ),
+        Migration::new(
+            crate::MODULE_ID,
+            5,
+            "scheduled_projection_gate_volumes",
+            SCHEDULER_PROJECTION_V5,
+        ),
+        Migration::new(
+            crate::MODULE_ID,
+            6,
+            "scheduled_projection_gate_image",
+            SCHEDULER_PROJECTION_V6,
+        ),
+        Migration::new(
+            crate::MODULE_ID,
+            7,
+            "scheduled_projection_run_as",
+            SCHEDULER_PROJECTION_V7,
         ),
     ]
 }
@@ -141,6 +173,15 @@ pub struct ProjectedItem {
     /// inside a `docker run --rm` container with the agent's credentials
     /// injected. `None` falls back to a raw host subprocess.
     pub gate_onecli_agent: Option<String>,
+    /// Docker volume mounts (`source:target` strings) added as `-v` flags when
+    /// the gate runs in a container. Empty for host-subprocess gates.
+    pub gate_volumes: Vec<String>,
+    /// Container image override for gate container runs. `None` uses the host's
+    /// base image.
+    pub gate_image: Option<String>,
+    /// The agent (`route_name`) this item's turn runs as. `None` runs as the
+    /// orchestrator.
+    pub run_as: Option<String>,
 }
 
 /// Project a scheduled message's metadata into the central `scheduled_items`
@@ -155,10 +196,15 @@ pub fn upsert_item(
         Some(rec) => Some(serde_json::to_string(rec)?),
         None => None,
     };
+    let gate_volumes_json = if meta.gate_volumes.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&meta.gate_volumes)?)
+    };
     conn.execute(
         "INSERT INTO scheduled_items
-             (id, agent_group_id, session_id, intent, process_after, recurrence, status, revision, gate_command, gate_onecli_agent)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             (id, agent_group_id, session_id, intent, process_after, recurrence, status, revision, gate_command, gate_onecli_agent, gate_volumes, gate_image, run_as)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT(id) DO UPDATE SET
              agent_group_id    = excluded.agent_group_id,
              session_id        = excluded.session_id,
@@ -168,7 +214,10 @@ pub fn upsert_item(
              status            = excluded.status,
              revision          = excluded.revision,
              gate_command      = excluded.gate_command,
-             gate_onecli_agent = excluded.gate_onecli_agent",
+             gate_onecli_agent = excluded.gate_onecli_agent,
+             gate_volumes      = excluded.gate_volumes,
+             gate_image        = excluded.gate_image,
+             run_as            = excluded.run_as",
         rusqlite::params![
             meta.scheduled_item_id,
             meta.agent_group_id,
@@ -180,6 +229,9 @@ pub fn upsert_item(
             meta.revision,
             meta.gate_command,
             meta.gate_onecli_agent,
+            gate_volumes_json,
+            meta.gate_image,
+            meta.run_as,
         ],
     )?;
     Ok(())
@@ -298,7 +350,7 @@ pub fn resume_item(conn: &Connection, scheduled_item_id: &str) -> Result<(), Pro
 }
 
 const ITEM_COLUMNS: &str =
-    "id, agent_group_id, session_id, intent, process_after, recurrence, status, revision, gate_command, gate_onecli_agent";
+    "id, agent_group_id, session_id, intent, process_after, recurrence, status, revision, gate_command, gate_onecli_agent, gate_volumes, gate_image, run_as";
 
 /// List an agent's projected scheduled items, optionally narrowed to one status,
 /// ordered by due time then id. Scoped to a single `agent_group_id`, never
@@ -377,6 +429,12 @@ fn row_to_item(row: &rusqlite::Row) -> Result<ProjectedItem, ProjectionError> {
     let status = ScheduleStatus::parse(&status_raw)
         .ok_or(ProjectionError::UnknownEnum { column: "status", value: status_raw })?;
 
+    let gate_volumes_json: Option<String> = row.get(10)?;
+    let gate_volumes = match gate_volumes_json {
+        Some(s) => serde_json::from_str::<Vec<String>>(&s)?,
+        None => Vec::new(),
+    };
+
     Ok(ProjectedItem {
         id: row.get(0)?,
         agent_group_id: row.get(1)?,
@@ -388,6 +446,9 @@ fn row_to_item(row: &rusqlite::Row) -> Result<ProjectedItem, ProjectionError> {
         revision: row.get(7)?,
         gate_command: row.get(8)?,
         gate_onecli_agent: row.get(9)?,
+        gate_volumes,
+        gate_image: row.get(11)?,
+        run_as: row.get(12)?,
     })
 }
 
@@ -434,13 +495,29 @@ mod tests {
     }
 
     #[test]
-    fn projection_migrations_cover_v2_to_v4() {
+    fn projection_migrations_cover_v2_to_v7() {
         let ms = migrations();
-        assert_eq!(ms.len(), 3);
         assert!(ms.iter().all(|m| m.module_id == crate::MODULE_ID));
-        assert_eq!(ms[0].version, 2);
-        assert_eq!(ms[1].version, 3);
-        assert_eq!(ms[2].version, 4);
+        let versions: Vec<u32> = ms.iter().map(|m| m.version).collect();
+        assert_eq!(versions, vec![2, 3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn upsert_item_round_trips_run_as() {
+        let conn = db();
+        let mut m = meta(9, "board sync", 5_000, true);
+        m.run_as = Some("se".to_string());
+        upsert_item(&conn, &m, Some("standing")).unwrap();
+
+        let rows = list_items(&conn, 9, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].run_as.as_deref(), Some("se"));
+
+        // Absent run_as round-trips as None.
+        let m2 = meta(10, "no run_as", 5_000, false);
+        upsert_item(&conn, &m2, Some("sess")).unwrap();
+        let rows = list_items(&conn, 10, None).unwrap();
+        assert_eq!(rows[0].run_as, None);
     }
 
     #[test]

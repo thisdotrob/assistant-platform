@@ -40,7 +40,7 @@ async function buildResponder() {
   }
   if (MODE === 'specialist') {
     const { runSpecialistTurn } = await import('./specialist.js');
-    return (content) => runSpecialistTurn(content);
+    return (content, memory, messages) => runSpecialistTurn(content, memory, messages);
   }
   return async (content) => ({
     text: `echo: ${content}`,
@@ -113,11 +113,20 @@ async function main() {
       // host reap the container before the later turns run.
       session.heartbeat();
 
+      // Scheduled turns (sender 'scheduler') are self-contained gate-driven
+      // dispatches, not a conversation: their inbound already carries everything
+      // (the task intent + the gate context). Replaying the session's history
+      // would balloon the prompt without value — a recurring standing task
+      // accumulates a new turn every interval, so its session grows unbounded and
+      // eventually overflows the model's context ("Prompt is too long"). Keep
+      // scheduled turns stateless; only human/agent conversations get history.
       let history = [];
-      try {
-        history = await session.buildHistory(seq, threadId);
-      } catch (err) {
-        console.error(`build_history for seq ${seq} failed: ${err.message}`);
+      if (sender !== 'scheduler') {
+        try {
+          history = await session.buildHistory(seq, threadId);
+        } catch (err) {
+          console.error(`build_history for seq ${seq} failed: ${err.message}`);
+        }
       }
 
       let result;
@@ -156,6 +165,9 @@ async function main() {
       }
       for (const delegation of result.delegations ?? []) {
         rows.push({ kind: 'delegate', content: JSON.stringify(delegation) });
+      }
+      for (const message of result.messages ?? []) {
+        rows.push({ kind: 'send_message', content: JSON.stringify(message) });
       }
       if (result.text && result.text.length > 0) {
         rows.push({ kind: 'text', content: result.text });

@@ -13,7 +13,7 @@ use crate::layout::DbKind;
 use crate::migrate::SessionMigration;
 
 /// Highest inbound schema version the current build ships.
-pub const CURRENT_INBOUND_VERSION: u32 = 4;
+pub const CURRENT_INBOUND_VERSION: u32 = 5;
 /// Highest outbound schema version the current build ships.
 pub const CURRENT_OUTBOUND_VERSION: u32 = 3;
 
@@ -57,6 +57,13 @@ CREATE UNIQUE INDEX idx_messages_in_idempotency_key ON messages_in (idempotency_
 // thread when building the Anthropic messages array. NULL for channels with no
 // thread concept (CLI) and for rows written before this migration.
 const INBOUND_V4: &str = "ALTER TABLE messages_in ADD COLUMN thread_id TEXT;";
+
+// The originating session id for an agent-to-agent message: when one agent
+// `send_message`s another, the host writes the target agent's inbound row
+// stamped with the sender's session id, so the target's reply can be routed back
+// to the exact session that initiated the exchange. NULL for messages that
+// arrive from an external channel or the scheduler (no originating agent session).
+const INBOUND_V5: &str = "ALTER TABLE messages_in ADD COLUMN source_session_id TEXT;";
 
 const OUTBOUND_V1: &str = "\
 CREATE TABLE messages_out (
@@ -117,6 +124,12 @@ pub fn inbound_migrations() -> Vec<SessionMigration> {
             version: 4,
             name: "inbound_message_thread_id",
             sql: INBOUND_V4,
+        },
+        SessionMigration {
+            db_kind: DbKind::Inbound,
+            version: 5,
+            name: "inbound_message_source_session_id",
+            sql: INBOUND_V5,
         },
     ]
 }

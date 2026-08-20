@@ -7,7 +7,7 @@
 //!
 //! It introduces no new dependency — only `std::process::Command`. The argv is
 //! produced entirely by [`docker_run_args`], which by contract carries only the
-//! `CLAUDE_CODE_OAUTH_TOKEN=placeholder`, never a raw token, so nothing secret is
+//! `ANTHROPIC_API_KEY=placeholder`, never a raw token, so nothing secret is
 //! ever passed on the command line.
 
 use std::process::Command;

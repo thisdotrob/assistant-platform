@@ -234,7 +234,7 @@ mod tests {
         let layout = instance_layout(&tmp);
         let sessions_root = layout.sessions_dir();
 
-        // Session A: both DBs migrated to the current schema (inbound v3, outbound v2).
+        // Session A: both DBs migrated to the current schema.
         let a = SessionLayout::derive(&sessions_root, "groupone", "sessone").unwrap();
         fs::create_dir_all(a.dir()).unwrap();
         let mut a_in = session_db::open_read_write(&a.inbound_db_path()).unwrap();
@@ -259,8 +259,14 @@ mod tests {
             .iter()
             .find(|s| s.session_id == "sessone")
             .unwrap();
-        assert_eq!(sa.inbound_version, Some(3));
-        assert_eq!(sa.outbound_version, Some(2));
+        assert_eq!(
+            sa.inbound_version,
+            Some(assistant_session::CURRENT_INBOUND_VERSION)
+        );
+        assert_eq!(
+            sa.outbound_version,
+            Some(assistant_session::CURRENT_OUTBOUND_VERSION)
+        );
 
         let sb = inv
             .sessions

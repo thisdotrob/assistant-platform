@@ -294,7 +294,10 @@ fn old_v1_outbound_fixture_migrates_lazily_on_recovery() {
         assert_eq!(schema_version(&conn).unwrap(), 1);
     }
     let guard = open_outbound_recovery(&layout, TTL).unwrap();
-    assert_eq!(schema_version(guard.connection()).unwrap(), 2);
+    assert_eq!(
+        schema_version(guard.connection()).unwrap(),
+        assistant_session::CURRENT_OUTBOUND_VERSION
+    );
 }
 
 #[test]
@@ -312,7 +315,7 @@ fn runner_refuses_unsupported_schema_version() {
             supported_max,
             ..
         } => {
-            assert_eq!(found, 2);
+            assert_eq!(found, assistant_session::CURRENT_OUTBOUND_VERSION);
             assert_eq!(supported_max, 1);
         }
         other => panic!("expected unsupported schema version, got {other:?}"),

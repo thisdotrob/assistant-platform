@@ -31,7 +31,9 @@
 
 import { readFileSync } from 'node:fs';
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
+
+import { buildAssistantTools } from './assistant-tools.js';
 
 // Bound a multi-step turn so a stuck or looping specialist can't burn unbounded
 // API calls; the host's turn timeout is the wall-clock backstop on top of this.
@@ -51,17 +53,44 @@ function jsonStringArray(raw, fallback) {
   return fallback;
 }
 
+// Parse a JSON array of `{ name, description }` destinations from an env var,
+// tolerating absence/malformed values by returning an empty list (the agent then
+// gets no `send_message` tool).
+function jsonDestinations(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.filter(
+        (d) => d && typeof d.name === 'string' && typeof d.description === 'string',
+      );
+    }
+  } catch {
+    // fall through to empty
+  }
+  return [];
+}
+
 // Derive the turn's options from the host-supplied environment. Pure and
 // SDK-free so it is unit-testable without spawning a Claude turn.
+//
+// `mcpTools` names the assistant MCP tools this specialist may use
+// (schedule_message, send_message, …) from ASSISTANT_SPECIALIST_MCP_TOOLS, and
+// `destinations` is the `send_message` recipient menu from
+// ASSISTANT_SPECIALIST_DESTINATIONS. Both default empty, so a specialist that
+// declares neither behaves exactly as before (built-in tools only, no
+// scheduling, no messaging).
 export function specialistOptionsFromEnv(env) {
   const systemPrompt = env.ASSISTANT_SPECIALIST_SYSTEM_PROMPT ?? '';
   const tools = jsonStringArray(env.ASSISTANT_SPECIALIST_TOOLS, []);
   const allowedTools = jsonStringArray(env.ASSISTANT_SPECIALIST_ALLOWED_TOOLS, []);
+  const mcpTools = jsonStringArray(env.ASSISTANT_SPECIALIST_MCP_TOOLS, []);
+  const destinations = jsonDestinations(env.ASSISTANT_SPECIALIST_DESTINATIONS);
   const parsedMaxTurns = Number.parseInt(env.ASSISTANT_SPECIALIST_MAX_TURNS ?? '', 10);
   const maxTurns = Number.isInteger(parsedMaxTurns) && parsedMaxTurns > 0
     ? parsedMaxTurns
     : DEFAULT_MAX_TURNS;
-  return { systemPrompt, tools, allowedTools, maxTurns };
+  return { systemPrompt, tools, allowedTools, mcpTools, destinations, maxTurns };
 }
 
 // Load the turn's MCP servers from the specialist image's Claude config
@@ -87,26 +116,69 @@ export function mcpServersFromConfig(env) {
   return {};
 }
 
-// Run one specialist turn over `goal`. Returns `{ text, scheduled, cancellations,
-// memories }` like the orchestrator responder; a specialist never schedules,
-// cancels, or saves memory, so those are always empty.
-export async function runSpecialistTurn(goal) {
-  const { systemPrompt, tools, allowedTools, maxTurns } = specialistOptionsFromEnv(process.env);
-  const mcpServers = mcpServersFromConfig(process.env);
+// Format prior turns as a plain-text transcript for the prompt (mirrors the
+// orchestrator path): user turns labelled "User:", assistant turns "You:".
+function formatHistory(messages) {
+  if (!messages || messages.length === 0) return '';
+  return messages
+    .map(({ role, content }) => `${role === 'assistant' ? 'You' : 'User'}: ${content}`)
+    .join('\n\n');
+}
+
+// Run one specialist turn. `goal` is the inbound content; `memory` is the host's
+// retrieved-memories block (or null); `messages` is the prior conversation
+// history. Returns `{ text, scheduled, cancellations, pauses, resumes, memories,
+// messages }` — the same shape the orchestrator responder returns, so a
+// schedule-capable specialist's requests flow through the runner unchanged. A
+// specialist that declares no assistant MCP tools gets empty side-effect arrays.
+export async function runSpecialistTurn(goal, memory, history) {
+  const { systemPrompt, tools, allowedTools, mcpTools, destinations, maxTurns } =
+    specialistOptionsFromEnv(process.env);
+  const fileServers = mcpServersFromConfig(process.env);
+
+  // Assistant MCP tools (scheduling / send_message) the spec opted into, plus
+  // the buffers their handlers record into for the runner to serialize.
+  const { tools: assistantTools, allowedToolNames, buffers } = buildAssistantTools({
+    enabled: mcpTools,
+    destinations,
+  });
+  const mcpServers = { ...fileServers };
+  if (assistantTools.length > 0) {
+    mcpServers.assistant = createSdkMcpServer({
+      name: 'assistant',
+      version: '0.1.0',
+      tools: assistantTools,
+    });
+  }
+
+  // Build the prompt like the orchestrator: optional memory preamble, then the
+  // prior transcript, then the current message.
+  const transcript = formatHistory(history);
+  const parts = [];
+  if (memory && memory.length > 0) parts.push(memory);
+  if (transcript.length > 0) {
+    parts.push(
+      `Here is the conversation so far, for context:\n\n${transcript}`,
+      `The new message is:\n\n${goal}`,
+    );
+  } else {
+    parts.push(goal);
+  }
+  const prompt = parts.join('\n\n');
 
   const q = query({
-    prompt: goal,
+    prompt,
     options: {
       systemPrompt,
       // MCP servers from the image's mcp.json (credentials injected by the
-      // OneCLI proxy, not carried here). The `mcp__<server>__*` patterns in
-      // `allowedTools` (from the specialist spec) auto-approve their tools.
+      // OneCLI proxy, not carried here) merged with the in-process `assistant`
+      // server carrying the scheduling / send_message tools the spec enabled.
       mcpServers,
-      // Enable only the host-declared built-in tools and auto-approve only the
-      // host-declared patterns. With dontAsk the turn never hangs on a permission
-      // prompt; anything outside the allowlist is denied rather than prompted.
+      // Enable only the host-declared built-in tools and auto-approve the
+      // host-declared patterns plus the enabled assistant tools. With dontAsk the
+      // turn never hangs on a permission prompt; anything else is denied.
       tools,
-      allowedTools,
+      allowedTools: [...allowedTools, ...allowedToolNames],
       permissionMode: 'dontAsk',
       maxTurns,
       env: { ...process.env },
@@ -127,5 +199,13 @@ export async function runSpecialistTurn(goal) {
       if (segment.trim().length > 0) segments.push(segment.trim());
     }
   }
-  return { text: segments.join('\n\n'), scheduled: [], cancellations: [], memories: [] };
+  return {
+    text: segments.join('\n\n'),
+    scheduled: buffers.scheduled,
+    cancellations: buffers.cancellations,
+    pauses: buffers.pauses,
+    resumes: buffers.resumes,
+    memories: buffers.memories,
+    messages: buffers.messages,
+  };
 }

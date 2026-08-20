@@ -56,8 +56,28 @@ impl RegisteredProfile {
         }
     }
 
+    /// The Slack-wired orchestrator profile: the one agent that may own external
+    /// channel destinations (post to Slack). Every other agent is a specialist.
+    pub fn orchestrator(
+        profile_id: impl Into<String>,
+        profile_version: impl Into<String>,
+        limits: ProfileLimits,
+    ) -> Self {
+        Self {
+            profile_id: profile_id.into(),
+            profile_version: profile_version.into(),
+            kind: "orchestrator".to_string(),
+            allows_external_destinations: true,
+            limits,
+        }
+    }
+
     pub fn is_specialist(&self) -> bool {
         self.kind == "specialist"
+    }
+
+    pub fn is_orchestrator(&self) -> bool {
+        self.kind == "orchestrator"
     }
 }
 

@@ -279,8 +279,8 @@ mod tests {
         assert_eq!(report.central_applied, vec![("assistant-db".to_string(), 2)]);
         assert_eq!(report.central_skipped, vec![("assistant-db".to_string(), 1)]);
         assert_eq!(report.sessions.len(), 1);
-        assert_eq!(report.sessions[0].inbound_applied, vec![2, 3]);
-        assert_eq!(report.sessions[0].outbound_applied, vec![2]);
+        assert_eq!(report.sessions[0].inbound_applied, vec![2, 3, 4, 5]);
+        assert_eq!(report.sessions[0].outbound_applied, vec![2, 3]);
 
         // Central DB is now at v2 on disk.
         let conn = assistant_db::open_central(&layout.central_db_path()).unwrap();
@@ -324,8 +324,8 @@ mod tests {
         assert_eq!(report.central_applied, vec![("assistant-db".to_string(), 2)]);
         assert_eq!(report.central_skipped, vec![("assistant-db".to_string(), 1)]);
         assert_eq!(report.sessions.len(), 1);
-        assert_eq!(report.sessions[0].inbound_applied, vec![2, 3]);
-        assert_eq!(report.sessions[0].outbound_applied, vec![2]);
+        assert_eq!(report.sessions[0].inbound_applied, vec![2, 3, 4, 5]);
+        assert_eq!(report.sessions[0].outbound_applied, vec![2, 3]);
 
         // Nothing actually migrated: central still at v1, session still at v1.
         let conn = assistant_db::open_central(&layout.central_db_path()).unwrap();

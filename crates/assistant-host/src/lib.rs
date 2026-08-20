@@ -261,6 +261,22 @@ fn run_slack_inner(opts: SlackRunOptions) -> Result<(), HostError> {
         HOST_AGENT_OWNER,
         &opts.memory_taxonomy,
     );
+
+    // Self-migrate the central DB on startup. `setup` applies domain migrations,
+    // but a plain daemon restart (e.g. via launchd after a redeploy) does not, so
+    // a newly shipped projection column would otherwise be missing until the next
+    // `setup` run. Idempotent per (module, version): a no-op when already applied.
+    match crate::setup_steps::apply_domain_migrations(&instance_layout.central_db_path()) {
+        Ok((applied, skipped)) => {
+            if applied > 0 {
+                eprintln!(
+                    "serve-slack: applied {applied} central-DB migration(s), skipped {skipped}"
+                );
+            }
+        }
+        Err(e) => eprintln!("serve-slack: central-DB migration failed (continuing): {e}"),
+    }
+
     let sessions_dir = instance_layout.sessions_dir();
 
     let onecli = onecli::probe(&instance_layout);
@@ -641,6 +657,7 @@ mod tests {
             extra_env: vec![],
             onecli_agent: format!("test-orchestrator-{route}"),
             standing_tasks: vec![],
+            ..Default::default()
         }
     }
 

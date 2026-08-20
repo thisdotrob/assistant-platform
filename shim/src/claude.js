@@ -22,6 +22,8 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
+import { buildAssistantTools } from './assistant-tools.js';
+
 // Parse the host-supplied specialist menu from ASSISTANT_SPECIALISTS: a JSON array of
 // `{ name, description }` entries (the projection of the registered
 // `SpecialistSpec`s). Tolerates absence and malformed values by returning an
@@ -67,6 +69,7 @@ export function buildSystemPrompt(specialists) {
     '- pause_schedule: temporarily suspend one of your scheduled items so it stops firing until you resume it.',
     '- resume_schedule: resume a paused scheduled item so it fires again.',
     '- save_memory: remember a durable fact, preference, or piece of context to recall in future turns.',
+    '- send_message: post to a Slack channel (by channel id) or message another agent by name. You are the only agent that can post to Slack, so other agents send their updates to you and you decide whether to surface anything and where.',
   ];
   if (hasSpecialists) {
     lines.push(
@@ -76,6 +79,8 @@ export function buildSystemPrompt(specialists) {
   lines.push(
     '',
     'Beyond those tools you converse: answer questions, summarise, and help think things through using what the user tells you and what you already know.',
+    '',
+    'Sometimes a message comes from another agent (the sender is "agent:...") reporting what it did or found — not from a human. When that happens, decide whether the humans need to know: if so, use send_message to post a concise, plain-language update to the right Slack channel (the report should tell you which — e.g. a channel id); if it is routine or needs no action, do nothing. Never post an agent\'s raw report verbatim; relay only what matters, in your own words.',
     '',
     'For a recurrence at a clock time (e.g. "every weekday at 9am", "the 1st of each month"), use schedule_message with the calendar option and a local time — not a raw interval. Calendar recurrence needs the user\'s timezone as an IANA name (e.g. "Europe/London"): use one they have given you, otherwise ask before scheduling. Use after_seconds (optionally with every_seconds) only for one-off reminders or plain fixed intervals.',
     '',
@@ -103,26 +108,6 @@ export function buildSystemPrompt(specialists) {
     'Replies are delivered to Slack. Keep them concise; standard Markdown (bold, bullets, links, headings, code) is fine and is converted to Slack formatting for you. Do not use horizontal rules (lines of ---).',
   );
   return lines.join('\n');
-}
-
-// A short human phrase for a schedule request, used only in the tool's
-// confirmation text (the host owns the real timing).
-function describeSchedule(args) {
-  const cal = args.calendar;
-  if (cal != null) {
-    if (cal.kind === 'weekly') {
-      const days = (cal.days ?? []).join(', ');
-      return `weekly on ${days} at ${cal.at} ${cal.tz}`;
-    }
-    if (cal.kind === 'monthly') {
-      return `monthly on day ${cal.day} at ${cal.at} ${cal.tz}`;
-    }
-    return `daily at ${cal.at} ${cal.tz}`;
-  }
-  const start = args.after_seconds ?? 0;
-  return args.every_seconds != null
-    ? `every ${args.every_seconds}s, starting in ${start}s`
-    : `in ${start}s`;
 }
 
 // `memory` is the host's `<retrieved_memories>` block (or null/empty). When
@@ -174,131 +159,26 @@ export async function runClaudeTurn(userText, memory, messages) {
   const specialists = specialistsFromEnv(process.env);
   const hasSpecialists = specialists.length > 0;
 
-  const scheduled = [];
-  const cancellations = [];
-  const pauses = [];
-  const resumes = [];
-  const memories = [];
-  const delegations = [];
-
-  const tools = [
-    tool(
+  // The orchestrator's own tools (scheduling + memory + send_message) come from
+  // the shared builder; `delegate` is added inline below when specialists are
+  // registered. As the Slack-wired agent it gets free-form `send_message`
+  // addressing so it can post to any channel id it chooses, or message an agent
+  // by name — its knowledge of registered specialists seeds the recipient hints.
+  const { tools, allowedToolNames, buffers } = buildAssistantTools({
+    enabled: [
       'schedule_message',
-      'Schedule a message to be processed in this channel later — use for reminders or recurring check-ins. The scheduled text is processed as a fresh turn when it fires. Choose exactly one timing form: after_seconds (a one-off, or with every_seconds a fixed interval), or calendar (a recurring local wall-clock time such as every weekday at 9am).',
-      {
-        text: z.string().describe('The message/instruction to process when the schedule fires.'),
-        after_seconds: z
-          .number()
-          .int()
-          .optional()
-          .describe(
-            'Seconds from now until the first (or only) firing. Use for a one-off reminder, or with every_seconds for a fixed interval. Omit when using calendar.',
-          ),
-        every_seconds: z
-          .number()
-          .int()
-          .optional()
-          .describe(
-            'Optional fixed recurrence interval in seconds, paired with after_seconds; omit for a one-time reminder or when using calendar.',
-          ),
-        calendar: z
-          .object({
-            kind: z
-              .enum(['daily', 'weekly', 'monthly'])
-              .describe('Recurrence shape: daily, weekly (on given weekdays), or monthly.'),
-            at: z.string().describe('Local wall-clock time as "HH:MM" (24-hour), e.g. "09:00".'),
-            tz: z
-              .string()
-              .describe('IANA timezone name for the local time, e.g. "Europe/London". Ask the user if unknown.'),
-            days: z
-              .array(z.enum(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']))
-              .optional()
-              .describe('For kind=weekly: the weekdays it fires on.'),
-            day: z
-              .number()
-              .int()
-              .optional()
-              .describe('For kind=monthly: day of the month 1-31 (clamped to the month length).'),
-          })
-          .optional()
-          .describe(
-            'Calendar-style recurrence at a local wall-clock time (DST-safe). Provide this instead of after_seconds/every_seconds. Always include the user\'s timezone.',
-          ),
-      },
-      async (args) => {
-        const entry = { text: args.text };
-        if (args.after_seconds != null) entry.after_seconds = args.after_seconds;
-        if (args.every_seconds != null) entry.every_seconds = args.every_seconds;
-        if (args.calendar != null) entry.calendar = args.calendar;
-        scheduled.push(entry);
-        return {
-          content: [{ type: 'text', text: `Scheduled "${args.text}" ${describeSchedule(args)}.` }],
-        };
-      },
-    ),
-    tool(
       'cancel_schedule',
-      'Cancel one of your existing scheduled items so it stops firing for good. Pass the id from the <schedules> block; cancelling an unknown or already-finished item is a harmless no-op.',
-      {
-        scheduled_item_id: z
-          .string()
-          .describe('The id of the scheduled item to cancel, taken from the <schedules> block.'),
-      },
-      async (args) => {
-        cancellations.push({ scheduled_item_id: args.scheduled_item_id });
-        return {
-          content: [{ type: 'text', text: `Cancelled scheduled item ${args.scheduled_item_id}.` }],
-        };
-      },
-    ),
-    tool(
       'pause_schedule',
-      'Temporarily suspend one of your active scheduled items so it stops firing until you resume it. Pass the id from the <schedules> block; pausing an unknown or non-active item is a harmless no-op.',
-      {
-        scheduled_item_id: z
-          .string()
-          .describe('The id of the scheduled item to pause, taken from the <schedules> block.'),
-      },
-      async (args) => {
-        pauses.push({ scheduled_item_id: args.scheduled_item_id });
-        return {
-          content: [{ type: 'text', text: `Paused scheduled item ${args.scheduled_item_id}.` }],
-        };
-      },
-    ),
-    tool(
       'resume_schedule',
-      'Resume one of your paused scheduled items so it fires again. Pass the id from the <schedules> block (look for the "paused" marker); resuming an unknown or non-paused item is a harmless no-op.',
-      {
-        scheduled_item_id: z
-          .string()
-          .describe('The id of the paused scheduled item to resume, taken from the <schedules> block.'),
-      },
-      async (args) => {
-        resumes.push({ scheduled_item_id: args.scheduled_item_id });
-        return {
-          content: [{ type: 'text', text: `Resumed scheduled item ${args.scheduled_item_id}.` }],
-        };
-      },
-    ),
-    tool(
       'save_memory',
-      'Remember a durable fact, preference, or piece of context for future turns — use when the user states something worth recalling later. The note is stored and may be surfaced as context in later turns across this agent.',
-      {
-        content: z.string().describe('The fact or context to remember, in your own words.'),
-        title: z
-          .string()
-          .optional()
-          .describe('Optional short human-readable label for the memory.'),
-      },
-      async (args) => {
-        const entry = { content: args.content };
-        if (args.title != null) entry.title = args.title;
-        memories.push(entry);
-        return { content: [{ type: 'text', text: `Saved a memory: "${args.content}".` }] };
-      },
-    ),
-  ];
+      'send_message',
+    ],
+    destinations: specialists.map((s) => ({ name: s.name, description: s.description })),
+    freeformTo: true,
+  });
+  const { scheduled, cancellations, pauses, resumes, memories } = buffers;
+  const outboundMessages = buffers.messages;
+  const delegations = [];
 
   // The `delegate` tool only exists when specialists are registered. Its
   // `specialist` enum and description are built from the host-supplied menu, so a
@@ -347,13 +227,7 @@ export async function runClaudeTurn(userText, memory, messages) {
 
   const scheduler = createSdkMcpServer({ name: 'assistant', version: '0.1.0', tools });
 
-  const allowedTools = [
-    'mcp__assistant__schedule_message',
-    'mcp__assistant__cancel_schedule',
-    'mcp__assistant__pause_schedule',
-    'mcp__assistant__resume_schedule',
-    'mcp__assistant__save_memory',
-  ];
+  const allowedTools = [...allowedToolNames];
   if (hasSpecialists) allowedTools.push('mcp__assistant__delegate');
 
   const q = query({
@@ -389,5 +263,14 @@ export async function runClaudeTurn(userText, memory, messages) {
       if (segment.trim().length > 0) segments.push(segment.trim());
     }
   }
-  return { text: segments.join('\n\n'), scheduled, cancellations, pauses, resumes, memories, delegations };
+  return {
+    text: segments.join('\n\n'),
+    scheduled,
+    cancellations,
+    pauses,
+    resumes,
+    memories,
+    delegations,
+    messages: outboundMessages,
+  };
 }
