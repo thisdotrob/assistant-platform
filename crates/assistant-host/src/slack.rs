@@ -44,7 +44,6 @@ use assistant_agent_protocol::CalendarRecurrence;
 use assistant_session::{session_exists, InboundMessage, OutboundMessage, SessionLayout};
 use rusqlite::Connection;
 
-use crate::delegation::SpecialistTicket;
 use crate::error::HostError;
 use crate::run::{Host, HostConfig};
 use crate::HOST_AGENT_GROUP;
@@ -149,11 +148,10 @@ pub struct SlackServeOptions {
     /// `None` leaves the daemon purely inbound-reactive (the offline tests and
     /// any non-scheduling caller).
     pub scheduler: Option<SchedulerTickConfig>,
-    /// The specialists the orchestrator may delegate to: a `delegate` row from a
-    /// turn is routed to a matching spec by `route_name`, run as a specialist job,
-    /// and its result is re-injected as a fresh follow-up turn. Empty drops any
-    /// `delegate` row (the offline tests that don't exercise delegation, and any
-    /// non-delegating caller).
+    /// The registered specialist agents, resolved by `route_name`: a scheduled
+    /// `run_as` item runs as the named agent, and an agent-to-agent `send_message`
+    /// is routed to the named agent. Empty for the offline tests and any caller
+    /// that registers no specialists.
     pub specialists: Vec<SpecialistSpec>,
 }
 
@@ -193,31 +191,6 @@ fn conversation_root<'a>(session_id: &'a str, agents: &[String]) -> &'a str {
     root
 }
 
-/// A finished background specialist job, reported from a worker thread back to
-/// the serve loop's drain. Carries everything the serve thread needs to
-/// terminalize the job ([`crate::delegation::finish_specialist`]) and route the
-/// follow-up turn back to the originating channel/thread. All fields are owned,
-/// so it is `Send` and crosses the worker→serve channel.
-struct CompletedDelegation {
-    /// The orchestrator channel/session the delegation originated in.
-    session_id: String,
-    /// Where the follow-up reply is delivered (same channel + thread as the ack).
-    target: DeliveryTarget,
-    /// The human who triggered the delegation, for save-memory provenance on the
-    /// follow-up turn. `None` for a non-human trigger.
-    source_user_id: Option<String>,
-    /// The agent-graph job id this result terminalizes.
-    job_id: String,
-    /// The original delegated goal, woven into the re-injection text.
-    goal: String,
-    /// The resolved specialist's artifact-size ceiling, enforced when the job is
-    /// terminalized ([`crate::delegation::finish_specialist`]).
-    max_artifact_bytes: u64,
-    /// The worker's result: the specialist's joined text and the container that
-    /// ran it (run-link provenance), or a human-readable failure reason.
-    outcome: Result<(String, Option<String>), String>,
-}
-
 /// A finished background `run_as` scheduled turn, reported from a worker thread
 /// to the serve loop's drain. A `run_as` turn (an agent, not the orchestrator,
 /// firing a scheduled item) runs in the background because real work — e.g. an SE
@@ -241,12 +214,6 @@ struct CompletedRunAs {
 /// message is dispatched to a per-channel [`Host`] (spawned lazily via
 /// `runtime_factory`), and every reply is posted back over `channel`, threaded
 /// under the triggering message.
-///
-/// A `delegate` action runs on a background worker thread (so a slow browsing
-/// specialist never blocks inbound handling); its result is re-injected as a
-/// follow-up turn from the serve loop's idle drain. Because the follow-up runs
-/// later, on the serve thread, it is ordered after any inbound handled in the
-/// meantime — a specialist answer can arrive after a reply to a newer message.
 ///
 /// Returns `Err` only on an unrecoverable listener fault (e.g. a rejected app
 /// token); a per-turn failure (session derive, turn, or delivery) is logged and
@@ -298,12 +265,8 @@ where
     // Only the inbound `sink` touches this, so a plain `&mut` capture suffices.
     let mut seen = RecentlySeen::new(SEEN_CAPACITY);
 
-    // Background specialist delegation: a `delegate` action is started on the
-    // serve thread, then run on a worker thread that reports the finished job over
-    // `completion_tx`. The serve loop drains `completion_rx` (idle tick + at
-    // shutdown) to run the follow-up turn. `inflight` holds the worker handles so
-    // shutdown can join them. Empty/unused when no caller delegates.
-    let (completion_tx, completion_rx) = std::sync::mpsc::channel::<CompletedDelegation>();
+    // Worker handles for background turns, so shutdown can join them.
+    // Empty/unused when nothing runs in the background.
     let inflight: RefCell<Vec<JoinHandle<()>>> = RefCell::new(Vec::new());
 
     // Background `run_as` scheduled turns: a long-running agent turn (an agent, not
@@ -325,8 +288,6 @@ where
                 channel_ref,
                 &opts,
                 &runtime_factory,
-                &completion_tx,
-                &inflight,
                 &mut seen,
             );
         };
@@ -335,20 +296,10 @@ where
         let tick_interval = opts.scheduler.as_ref().map(|s| s.tick_interval);
         let mut last_tick: Option<Instant> = None;
         let mut tick = || {
-            // Drain finished specialist jobs every idle window (unthrottled) so a
-            // background worker's result follows up promptly, independent of the
-            // scheduler sweep cadence.
-            drain_completed_delegations(
-                &completion_rx,
-                &conn,
-                &hosts,
-                channel_ref,
-                &opts,
-                &runtime_factory,
-            );
-            // Drain finished background `run_as` turns too (unthrottled), so a
-            // long agent turn's effects apply and its occurrence finalizes as soon
-            // as it completes, independent of the sweep cadence.
+            // Drain finished background `run_as` turns every idle window
+            // (unthrottled), so a long agent turn's effects apply and its
+            // occurrence finalizes as soon as it completes, independent of the
+            // sweep cadence.
             drain_completed_runas(
                 &runas_rx,
                 &run_as_inflight,
@@ -357,8 +308,6 @@ where
                 channel_ref,
                 &opts,
                 &runtime_factory,
-                &completion_tx,
-                &inflight,
             );
             let Some(interval) = tick_interval else {
                 return;
@@ -373,7 +322,6 @@ where
                 channel_ref,
                 &opts,
                 &runtime_factory,
-                &completion_tx,
                 &inflight,
                 &runas_tx,
                 &run_as_inflight,
@@ -383,21 +331,17 @@ where
             .map_err(|e| HostError::Channel(e.to_string()))
     };
 
-    // Shutdown drain: join every in-flight specialist worker (each reaps its own
-    // job container inside `run_specialist_turn`, bounded by the turn timeout),
-    // then run one final drain so a job that finished after the last idle tick
-    // still delivers its follow-up before we tear the per-channel hosts down.
+    // Shutdown drain: join every in-flight background worker (each reaps its own
+    // container, bounded by the turn timeout), then run one final drain so a turn
+    // that finished after the last idle tick still applies its effects before we
+    // tear the per-channel hosts down.
     for handle in inflight.into_inner() {
         if let Err(err) = handle.join() {
-            eprintln!("slack: a specialist worker panicked: {err:?}");
+            eprintln!("slack: a background worker panicked: {err:?}");
         }
     }
-    drain_completed_delegations(&completion_rx, &conn, &hosts, channel_ref, &opts, &runtime_factory);
     // Final `run_as` drain: apply the effects of any background turn that finished
     // after the last idle tick (or during the shutdown join) before tearing down.
-    // `inflight` is already consumed by the join above; any delegation a finalize
-    // spawns now goes to a throwaway vec joined immediately after.
-    let shutdown_inflight: RefCell<Vec<JoinHandle<()>>> = RefCell::new(Vec::new());
     drain_completed_runas(
         &runas_rx,
         &run_as_inflight,
@@ -406,12 +350,7 @@ where
         channel_ref,
         &opts,
         &runtime_factory,
-        &completion_tx,
-        &shutdown_inflight,
     );
-    for handle in shutdown_inflight.into_inner() {
-        let _ = handle.join();
-    }
 
     // Best-effort: stop every container this session spawned before returning.
     for (_chat, mut host) in hosts.into_inner() {
@@ -423,7 +362,6 @@ where
 /// Dispatch one routed Slack event: ensure a [`Host`] for its channel, run the
 /// turn, and deliver each reply back into the same channel/thread. Failures are
 /// logged and swallowed so the serve loop survives a single bad turn.
-#[allow(clippy::too_many_arguments)]
 fn handle_event<A, R, F>(
     event: RoutingEvent,
     conn: &Connection,
@@ -431,8 +369,6 @@ fn handle_event<A, R, F>(
     channel: &SlackChannel<A>,
     opts: &SlackServeOptions,
     runtime_factory: &F,
-    completion_tx: &Sender<CompletedDelegation>,
-    inflight: &RefCell<Vec<JoinHandle<()>>>,
     seen: &mut RecentlySeen,
 ) where
     A: SlackApi,
@@ -494,14 +430,7 @@ fn handle_event<A, R, F>(
         chat_id: event.chat_id.clone(),
         thread_root_id: Some(thread_root),
     };
-    // Two passes so the orchestrator's acknowledgment posts before any (blocking)
-    // specialist run. A `delegate` turn emits its `delegate` row alongside an
-    // "on it" text row; delivering the non-delegate rows first lets the user see
-    // that ack immediately, then the specialist runs and its result follows up.
     for reply in &replies {
-        if reply.kind == "delegate" {
-            continue;
-        }
         deliver_reply(
             conn,
             channel,
@@ -510,255 +439,6 @@ fn handle_event<A, R, F>(
             opts,
             reply,
             Some(&event.sender_id),
-            None,
-        );
-    }
-    for reply in &replies {
-        if reply.kind != "delegate" {
-            continue;
-        }
-        process_delegation(
-            conn,
-            channel,
-            opts,
-            runtime_factory,
-            completion_tx,
-            inflight,
-            &target,
-            &event.chat_id,
-            &reply.content,
-            Some(&event.sender_id),
-        );
-    }
-}
-
-/// Start a `delegate` action emitted by an orchestrator turn and hand it to a
-/// background worker, so a slow browsing specialist never blocks inbound frame
-/// handling. Phase 1 ([`crate::delegation::begin_specialist`]) opens and starts
-/// the job on the serve thread under the concurrency cap; phase 2 runs on the
-/// worker ([`dispatch_specialist`]); phase 3 ([`finish_one_delegation`], from the
-/// drain) re-injects the result as a fresh follow-up turn. A start-time rejection
-/// (bad payload, unknown specialist, cap reached) never spawned a worker, so it
-/// is surfaced to the user in the same thread — the orchestrator already
-/// acknowledged, so silence would leave them waiting.
-#[allow(clippy::too_many_arguments)]
-fn process_delegation<A, R, F>(
-    conn: &Connection,
-    channel: &SlackChannel<A>,
-    opts: &SlackServeOptions,
-    runtime_factory: &F,
-    completion_tx: &Sender<CompletedDelegation>,
-    inflight: &RefCell<Vec<JoinHandle<()>>>,
-    target: &DeliveryTarget,
-    session_id: &str,
-    payload: &str,
-    source_user_id: Option<&str>,
-) where
-    A: SlackApi,
-    R: ContainerRuntime + 'static,
-    R::Error: std::fmt::Display,
-    F: Fn() -> R + Send + Clone + 'static,
-{
-    if opts.specialists.is_empty() {
-        eprintln!(
-            "slack: a turn in channel {session_id} emitted delegate but specialist delegation is not configured; dropping"
-        );
-        return;
-    }
-
-    let ticket = match crate::delegation::begin_specialist(conn, &opts.specialists, payload) {
-        Ok(ticket) => ticket,
-        Err(reason) => {
-            let body = format!("Sorry — I couldn't complete that request: {reason}");
-            if let Err(err) = channel.deliver(target, &OutboundContent::Text { body }) {
-                eprintln!(
-                    "slack: delivering a delegation failure to channel {session_id} failed: {err}"
-                );
-            }
-            return;
-        }
-    };
-
-    dispatch_specialist(
-        ticket,
-        &opts.config,
-        &opts.sessions_dir,
-        runtime_factory,
-        completion_tx,
-        inflight,
-        session_id,
-        target,
-        source_user_id,
-    );
-}
-
-/// Spawn a background worker that runs a started specialist job's container turn
-/// off the serve thread, reporting the finished job over `completion_tx`. Every
-/// value the worker touches is an owned clone, so the spawned closure borrows
-/// nothing from the serve loop's stack (`Send + 'static`). The join handle is
-/// recorded in `inflight` so shutdown can join the worker (each reaps its own
-/// container in [`crate::delegation::run_specialist_turn`]).
-#[allow(clippy::too_many_arguments)]
-fn dispatch_specialist<R, F>(
-    ticket: SpecialistTicket,
-    base_config: &HostConfig,
-    sessions_dir: &Path,
-    runtime_factory: &F,
-    completion_tx: &Sender<CompletedDelegation>,
-    inflight: &RefCell<Vec<JoinHandle<()>>>,
-    session_id: &str,
-    target: &DeliveryTarget,
-    source_user_id: Option<&str>,
-) where
-    R: ContainerRuntime + 'static,
-    R::Error: std::fmt::Display,
-    F: Fn() -> R + Send + Clone + 'static,
-{
-    let SpecialistTicket {
-        job_id,
-        packet,
-        spec,
-    } = ticket;
-    let goal = packet.goal.clone();
-    let max_artifact_bytes = spec.max_artifact_bytes;
-    let base_config = base_config.clone();
-    let sessions_dir = sessions_dir.to_path_buf();
-    let factory = runtime_factory.clone();
-    let tx = completion_tx.clone();
-    let session_id = session_id.to_string();
-    let target = target.clone();
-    let source_user_id = source_user_id.map(str::to_string);
-
-    let handle = std::thread::spawn(move || {
-        let outcome = crate::delegation::run_specialist_turn(
-            &base_config,
-            &sessions_dir,
-            &spec,
-            &factory,
-            &job_id,
-            &packet,
-        );
-        // The serve loop owns the central DB; the worker only reports the result.
-        // A send error means the serve loop is already gone (shutting down).
-        let _ = tx.send(CompletedDelegation {
-            session_id,
-            target,
-            source_user_id,
-            job_id,
-            goal,
-            max_artifact_bytes,
-            outcome,
-        });
-    });
-    inflight.borrow_mut().push(handle);
-}
-
-/// Drain every background specialist job that has reported back, running each
-/// one's follow-up turn on the serve thread. Called from the idle tick
-/// (unthrottled) and once more at shutdown after the workers are joined. No-op
-/// when nothing has finished.
-fn drain_completed_delegations<A, R, F>(
-    completed: &Receiver<CompletedDelegation>,
-    conn: &Connection,
-    hosts: &RefCell<HashMap<String, Host<R>>>,
-    channel: &SlackChannel<A>,
-    opts: &SlackServeOptions,
-    runtime_factory: &F,
-) where
-    A: SlackApi,
-    R: ContainerRuntime,
-    R::Error: std::fmt::Display,
-    F: Fn() -> R,
-{
-    while let Ok(done) = completed.try_recv() {
-        finish_one_delegation(done, conn, hosts, channel, opts, runtime_factory);
-    }
-}
-
-/// Phase 3 for one finished delegation, on the serve thread: terminalize the job
-/// ([`crate::delegation::finish_specialist`]), then re-inject the specialist's
-/// result as a fresh follow-up turn through the same per-channel [`Host`] (so it
-/// reuses the channel container, never a second one) and deliver its replies. A
-/// hard specialist failure is surfaced to the user in the same thread so the
-/// acknowledged ask is not left hanging. A nested `delegate` from the follow-up is
-/// dropped: a specialist result must not spawn another specialist run in the same
-/// chain (bounds re-delegation to one level). Side-effect rows still take effect.
-fn finish_one_delegation<A, R, F>(
-    done: CompletedDelegation,
-    conn: &Connection,
-    hosts: &RefCell<HashMap<String, Host<R>>>,
-    channel: &SlackChannel<A>,
-    opts: &SlackServeOptions,
-    runtime_factory: &F,
-) where
-    A: SlackApi,
-    R: ContainerRuntime,
-    R::Error: std::fmt::Display,
-    F: Fn() -> R,
-{
-    let CompletedDelegation {
-        session_id,
-        target,
-        source_user_id,
-        job_id,
-        goal,
-        max_artifact_bytes,
-        outcome,
-    } = done;
-
-    let reinjected =
-        match crate::delegation::finish_specialist(conn, &job_id, &goal, max_artifact_bytes, outcome)
-        {
-            Ok(text) => text,
-            Err(reason) => {
-                let body = format!("Sorry — I couldn't complete that request: {reason}");
-                if let Err(err) = channel.deliver(&target, &OutboundContent::Text { body }) {
-                    eprintln!(
-                        "slack: delivering a delegation failure to channel {session_id} failed: {err}"
-                    );
-                }
-                return;
-            }
-        };
-
-    let inbound = InboundMessage {
-        sender: "specialist".to_string(),
-        content: reinjected,
-        metadata: None,
-        thread_id: None,
-    };
-    let replies = {
-        let mut map = hosts.borrow_mut();
-        let host = match host_for(&mut map, &session_id, opts, runtime_factory) {
-            Some(host) => host,
-            None => return,
-        };
-        match host.run_turn(&inbound) {
-            Ok(replies) => replies,
-            Err(err) => {
-                eprintln!(
-                    "slack: follow-up turn after delegation failed for channel {session_id}: {err}"
-                );
-                return;
-            }
-        }
-    };
-
-    for reply in &replies {
-        if reply.kind == "delegate" {
-            eprintln!(
-                "slack: dropping a nested delegate from a post-delegation follow-up in channel {session_id}"
-            );
-            continue;
-        }
-        deliver_reply(
-            conn,
-            channel,
-            &target,
-            &session_id,
-            opts,
-            reply,
-            source_user_id.as_deref(),
             None,
         );
     }
@@ -849,7 +529,6 @@ fn scheduler_tick<A, R, F>(
     channel: &SlackChannel<A>,
     opts: &SlackServeOptions,
     runtime_factory: &F,
-    completion_tx: &Sender<CompletedDelegation>,
     inflight: &RefCell<Vec<JoinHandle<()>>>,
     runas_tx: &Sender<CompletedRunAs>,
     run_as_inflight: &RefCell<HashSet<String>>,
@@ -1041,8 +720,6 @@ fn scheduler_tick<A, R, F>(
             channel,
             opts,
             runtime_factory,
-            completion_tx,
-            inflight,
             item,
             &lease.occurrence,
             &replies,
@@ -1056,12 +733,11 @@ fn scheduler_tick<A, R, F>(
 /// `run_as` drain, so both process replies and advance the schedule identically.
 ///
 /// Replies route by kind: `send_message` goes through [`route_send_message`]
-/// (agent→orchestrator→channel), `delegate` through [`process_delegation`]; a
-/// `run_as` agent's plain text is internal (never posted — only the orchestrator
-/// surfaces to a channel), while the orchestrator's own text posts; side-effect
-/// kinds (schedule/cancel/…/save_memory) apply via [`deliver_reply`]. Then the
-/// per-session source of truth records the fire and the central projection is
-/// finalized (recurring advance / one-off complete).
+/// (agent→orchestrator→channel); a `run_as` agent's plain text is internal (never
+/// posted — only the orchestrator surfaces to a channel), while the orchestrator's
+/// own text posts; side-effect kinds (schedule/cancel/…/save_memory) apply via
+/// [`deliver_reply`]. Then the per-session source of truth records the fire and
+/// the central projection is finalized (recurring advance / one-off complete).
 #[allow(clippy::too_many_arguments)]
 fn finalize_scheduled_turn<A, R, F>(
     conn: &Connection,
@@ -1069,8 +745,6 @@ fn finalize_scheduled_turn<A, R, F>(
     channel: &SlackChannel<A>,
     opts: &SlackServeOptions,
     runtime_factory: &F,
-    completion_tx: &Sender<CompletedDelegation>,
-    inflight: &RefCell<Vec<JoinHandle<()>>>,
     item: &ProjectedItem,
     occurrence: &Occurrence,
     replies: &[OutboundMessage],
@@ -1092,9 +766,6 @@ fn finalize_scheduled_turn<A, R, F>(
         thread_root_id: None,
     };
     for reply in replies {
-        if reply.kind == "delegate" {
-            continue;
-        }
         if reply.kind == "send_message" {
             // Only the Slack-wired orchestrator (run_as None, or a slack_wired
             // spec) may reach a channel; a specialist can only send to the
@@ -1118,23 +789,6 @@ fn finalize_scheduled_turn<A, R, F>(
             continue;
         }
         deliver_reply(conn, channel, &target, &session_id, opts, reply, None, run_as);
-    }
-    for reply in replies {
-        if reply.kind != "delegate" {
-            continue;
-        }
-        process_delegation(
-            conn,
-            channel,
-            opts,
-            runtime_factory,
-            completion_tx,
-            inflight,
-            &target,
-            &session_id,
-            &reply.content,
-            None,
-        );
     }
 
     // Record the fire in the per-session source of truth, then finalize the
@@ -1222,8 +876,6 @@ fn drain_completed_runas<A, R, F>(
     channel: &SlackChannel<A>,
     opts: &SlackServeOptions,
     runtime_factory: &F,
-    completion_tx: &Sender<CompletedDelegation>,
-    inflight: &RefCell<Vec<JoinHandle<()>>>,
 ) where
     A: SlackApi,
     R: ContainerRuntime + 'static,
@@ -1242,8 +894,6 @@ fn drain_completed_runas<A, R, F>(
                 channel,
                 opts,
                 runtime_factory,
-                completion_tx,
-                inflight,
                 &done.item,
                 &done.occurrence,
                 &replies,
@@ -1388,14 +1038,6 @@ fn deliver_reply<A>(
                 "slack: a turn in channel {session_id} emitted save_memory but memory is not configured; dropping"
             ),
         }
-        return;
-    }
-    if reply.kind == "delegate" {
-        // Delegation is driven from the inbound path (`handle_event`), which
-        // intercepts `delegate` rows before delivery. Any reaching here came via
-        // direct delivery (e.g. a scheduled turn), which has no delegation driver,
-        // so drop it rather than posting raw payload JSON.
-        eprintln!("slack: dropping a delegate row reached via direct delivery in channel {session_id}");
         return;
     }
     if reply.kind == "send_message" {

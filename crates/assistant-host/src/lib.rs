@@ -331,10 +331,10 @@ fn run_slack_inner(opts: SlackRunOptions) -> Result<(), HostError> {
     )
     .map_err(HostError::Layout)?;
 
-    // The orchestrator container builds its dynamic `delegate` routing menu from
-    // this: a JSON array of `{name, description}`, one per registered specialist.
-    // `run_specialist_turn` overwrites `extra_env`, so a specialist never inherits
-    // `ASSISTANT_SPECIALISTS` (and so cannot re-delegate from its own image).
+    // The orchestrator container builds its dynamic routing menu from this: a JSON
+    // array of `{name, description}`, one per registered specialist.
+    // `agent_host_config` overwrites `extra_env` when building a specialist's turn,
+    // so a specialist never inherits `ASSISTANT_SPECIALISTS`.
     let menu: Vec<_> = specialists.iter().map(|s| s.menu_entry()).collect();
     let specialists_json = serde_json::to_string(&menu)
         .map_err(|e| HostError::Layout(format!("serializing the specialist menu failed: {e}")))?;
