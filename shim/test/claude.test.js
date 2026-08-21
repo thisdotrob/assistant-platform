@@ -64,10 +64,13 @@ test('buildSystemPrompt lists each registered specialist by name and description
     { name: 'browser', description: 'browses the web and reads pages' },
     { name: 'sql', description: 'runs read-only database queries' },
   ]);
-  assert.match(prompt, /- delegate:/);
-  assert.match(prompt, /Specialists you can delegate to:/);
+  // No separate delegate tool: send_message is the single primitive for reaching
+  // a specialist by name.
+  assert.doesNotMatch(prompt, /- delegate:/);
+  assert.match(prompt, /hand a task to a specialist by name/);
+  assert.match(prompt, /Specialists you can hand work to/);
   assert.match(prompt, /- browser: browses the web and reads pages/);
   assert.match(prompt, /- sql: runs read-only database queries/);
-  // Keeps the "present delegated work as your own" guidance.
+  // Keeps the "present the work as your own" guidance.
   assert.match(prompt, /never say "delegate", "specialist", or "sub-agent"/);
 });

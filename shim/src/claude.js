@@ -69,13 +69,8 @@ export function buildSystemPrompt(specialists) {
     '- pause_schedule: temporarily suspend one of your scheduled items so it stops firing until you resume it.',
     '- resume_schedule: resume a paused scheduled item so it fires again.',
     '- save_memory: remember a durable fact, preference, or piece of context to recall in future turns.',
-    '- send_message: post to a Slack channel (by channel id) or message another agent by name. You are the only agent that can post to Slack, so other agents send their updates to you and you decide whether to surface anything and where.',
+    '- send_message: post to a Slack channel (by channel id) or hand a task to a specialist by name. You are the only agent that can post to Slack, so specialists send their results/updates back to you and you decide whether to surface anything and where.',
   ];
-  if (hasSpecialists) {
-    lines.push(
-      '- delegate: hand a task to a specialist that can do work you cannot do yourself. The work runs separately and its result comes back to you as a follow-up.',
-    );
-  }
   lines.push(
     '',
     'Beyond those tools you converse: answer questions, summarise, and help think things through using what the user tells you and what you already know.',
@@ -90,10 +85,10 @@ export function buildSystemPrompt(specialists) {
   if (hasSpecialists) {
     const menu = specialists.map((s) => `- ${s.name}: ${s.description}`).join('\n');
     lines.push(
-      'Specialists you can delegate to:',
+      'Specialists you can hand work to (send_message, using the name):',
       menu,
       '',
-      'Delegation is asynchronous: when you call delegate, the work runs separately and its result comes back to you as a fresh follow-up turn — you do not get the answer within the same reply. So when you start one, briefly tell the user you are looking into it, then share what you found when the result arrives. Present delegated work as your own: never say "delegate", "specialist", or "sub-agent" to the user — describe what you are doing in plain terms (e.g. that you are looking something up).',
+      'Handing off is asynchronous: send_message the specialist by name with a clear, self-contained task, and — when a human is waiting — include the Slack channel id of the conversation and ask the specialist to send its result back to you quoting that channel id. The result does not arrive within this reply; it comes back later as a fresh turn whose sender is "agent:...". So briefly tell the user you are looking into it, then, when the result arrives, post it to that channel with send_message. Present the work as your own: never say "delegate", "specialist", or "sub-agent" to the user — describe what you are doing in plain terms (e.g. that you are looking something up).',
       '',
     );
   }
@@ -101,9 +96,9 @@ export function buildSystemPrompt(specialists) {
     ? 'Some requests need a capability none of your specialists cover — reading or editing files, running code or shell commands, or querying other external systems or APIs.'
     : 'You cannot directly read or edit files, run code or shell commands, or query other external systems or APIs.';
   lines.push(
-    `${uncovered} When a request needs a capability like that, do not offer to do it yourself and do not ask the user to paste in the content for you. Instead, explain that this kind of work is handled by a specialist sub-agent that has not been set up yet, and that one can be added for that task so you can delegate to it.`,
+    `${uncovered} When a request needs a capability like that, do not offer to do it yourself and do not ask the user to paste in the content for you. Instead, explain that this kind of work is handled by a specialist sub-agent that has not been set up yet, and that one can be added for that task so you can hand it off via send_message.`,
     '',
-    `When asked what you can do, describe your abilities honestly — conversation, reminders you can set, pause, resume, and cancel, durable memory${hasSpecialists ? ', and the specialists you can delegate to' : ''} — and do not claim capabilities you do not have.`,
+    `When asked what you can do, describe your abilities honestly — conversation, reminders you can set, pause, resume, and cancel, durable memory${hasSpecialists ? ', and the specialists you can hand work to' : ''} — and do not claim capabilities you do not have.`,
     '',
     'Replies are delivered to Slack. Keep them concise; standard Markdown (bold, bullets, links, headings, code) is fine and is converted to Slack formatting for you. Do not use horizontal rules (lines of ---).',
   );
@@ -178,57 +173,13 @@ export async function runClaudeTurn(userText, memory, messages) {
   });
   const { scheduled, cancellations, pauses, resumes, memories } = buffers;
   const outboundMessages = buffers.messages;
-  const delegations = [];
 
-  // The `delegate` tool only exists when specialists are registered. Its
-  // `specialist` enum and description are built from the host-supplied menu, so a
-  // new specialist becomes routable with no shim change. With no specialists the
-  // tool is omitted entirely — the prompt then steers the bot to explain one can
-  // be set up rather than offering to do the work itself.
-  if (hasSpecialists) {
-    const roster = specialists.map((s) => `"${s.name}" — ${s.description}`).join('; ');
-    tools.push(
-      tool(
-        'delegate',
-        `Hand a task to a specialist that can do work you cannot do yourself. The work runs separately and its result returns as a fresh follow-up turn, not within this reply, so briefly acknowledge (as your own work, without mentioning delegation or a specialist) and share what you found when it arrives. Available specialists: ${roster}.`,
-        {
-          specialist: z
-            .enum(specialists.map((s) => s.name))
-            .describe(`Which specialist to delegate to. Options: ${roster}.`),
-          goal: z
-            .string()
-            .describe('What the specialist should accomplish, in a clear self-contained instruction.'),
-          facts: z
-            .array(z.string())
-            .optional()
-            .describe('Relevant context the specialist needs (e.g. URLs, prior findings).'),
-          constraints: z
-            .array(z.string())
-            .optional()
-            .describe('Optional guardrails or limits the specialist must respect.'),
-        },
-        async (args) => {
-          const entry = { specialist: args.specialist, goal: args.goal };
-          if (args.facts != null) entry.facts = args.facts;
-          if (args.constraints != null) entry.constraints = args.constraints;
-          delegations.push(entry);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Started working on: "${args.goal}". The result will arrive as a follow-up.`,
-              },
-            ],
-          };
-        },
-      ),
-    );
-  }
+  // Reaching a specialist is done through `send_message` (to the agent's name),
+  // the single agent-to-agent primitive — there is no separate `delegate` tool.
 
   const scheduler = createSdkMcpServer({ name: 'assistant', version: '0.1.0', tools });
 
   const allowedTools = [...allowedToolNames];
-  if (hasSpecialists) allowedTools.push('mcp__assistant__delegate');
 
   const q = query({
     prompt,
@@ -270,7 +221,6 @@ export async function runClaudeTurn(userText, memory, messages) {
     pauses,
     resumes,
     memories,
-    delegations,
     messages: outboundMessages,
   };
 }

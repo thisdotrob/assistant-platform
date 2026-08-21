@@ -163,9 +163,6 @@ async function main() {
       for (const memory of result.memories ?? []) {
         rows.push({ kind: 'save_memory', content: JSON.stringify(memory) });
       }
-      for (const delegation of result.delegations ?? []) {
-        rows.push({ kind: 'delegate', content: JSON.stringify(delegation) });
-      }
       for (const message of result.messages ?? []) {
         rows.push({ kind: 'send_message', content: JSON.stringify(message) });
       }
