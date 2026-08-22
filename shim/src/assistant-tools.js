@@ -249,3 +249,28 @@ export function buildAssistantTools({ enabled, destinations = [], freeformTo = f
   const allowedToolNames = included.map((name) => `mcp__assistant__${name}`);
   return { tools, allowedToolNames, buffers };
 }
+
+// Extract per-turn inference usage/cost from the Agent SDK's terminal `result`
+// message. `modelUsage` is the SDK's documented field for token/cost accounting
+// (per-model input/output/cache tokens + costUSD); each per-turn query() result
+// carries that turn's totals. Returns null when the message isn't a result or
+// carries no model usage, so the caller emits no usage row for that turn.
+export function usageFromResult(message) {
+  if (!message || message.type !== 'result') return null;
+  const models = Object.entries(message.modelUsage ?? {}).map(([model, u]) => ({
+    model: u.canonicalModel ?? model,
+    provider: u.provider ?? null,
+    inputTokens: u.inputTokens ?? 0,
+    outputTokens: u.outputTokens ?? 0,
+    cacheReadInputTokens: u.cacheReadInputTokens ?? 0,
+    cacheCreationInputTokens: u.cacheCreationInputTokens ?? 0,
+    costUSD: u.costUSD ?? 0,
+  }));
+  if (models.length === 0) return null;
+  return {
+    subtype: message.subtype ?? null,
+    numTurns: message.num_turns ?? null,
+    totalCostUsd: message.total_cost_usd ?? 0,
+    models,
+  };
+}

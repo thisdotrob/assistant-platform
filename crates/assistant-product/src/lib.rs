@@ -383,6 +383,81 @@ pub fn run(product: Product) -> i32 {
         return code;
     }
 
+    if args.get(1).map(String::as_str) == Some("report-usage") {
+        let mut instance: Option<String> = None;
+        let mut home: Option<PathBuf> = None;
+        let mut since_epoch: Option<i64> = None;
+        let mut bucket = assistant_host::usage::Bucket::Day;
+
+        let rest = &args[2..];
+        let mut i = 0;
+        while i < rest.len() {
+            match rest[i].as_str() {
+                "--instance" => {
+                    if let Some(value) = rest.get(i + 1) {
+                        instance = Some(value.clone());
+                        i += 2;
+                        continue;
+                    }
+                }
+                "--home" => {
+                    if let Some(value) = rest.get(i + 1) {
+                        home = Some(PathBuf::from(value));
+                        i += 2;
+                        continue;
+                    }
+                }
+                "--since" => {
+                    if let Some(value) = rest.get(i + 1) {
+                        match parse_since_window(value) {
+                            Some(secs) => {
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs() as i64)
+                                    .unwrap_or(0);
+                                since_epoch = Some((now - secs).max(0));
+                            }
+                            None => {
+                                eprintln!(
+                                    "invalid --since value {value:?}; expected a duration like 24h, 7d, 2w, 3m"
+                                );
+                                return 2;
+                            }
+                        }
+                        i += 2;
+                        continue;
+                    }
+                }
+                "--bucket" => {
+                    if let Some(value) = rest.get(i + 1) {
+                        match assistant_host::usage::Bucket::parse(value) {
+                            Some(b) => bucket = b,
+                            None => {
+                                eprintln!(
+                                    "invalid --bucket value {value:?}; expected one of hour|day|week|month"
+                                );
+                                return 2;
+                            }
+                        }
+                        i += 2;
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+
+        let code = assistant_host::run_report_usage(assistant_host::ReportUsageOptions {
+            namespace: product.product_id.to_string(),
+            instance,
+            home,
+            since_epoch,
+            bucket,
+        });
+        return code;
+    }
+
     if args.get(1).map(String::as_str) == Some("serve-web") {
         let mut instance: Option<String> = None;
         let mut home: Option<PathBuf> = None;
@@ -698,4 +773,32 @@ pub fn run(product: Product) -> i32 {
     println!("profile.kind={profile_kind}");
 
     0
+}
+
+/// Parse a `--since` duration like `24h`, `7d`, `2w`, `3m` into seconds. The
+/// suffix selects the unit: `h`=hours, `d`=days, `w`=weeks, `m`=30-day months.
+/// Returns `None` on an empty/zero-length number, an unknown suffix, a missing
+/// suffix, or a non-numeric magnitude (overflow also yields `None`).
+fn parse_since_window(s: &str) -> Option<i64> {
+    let s = s.trim();
+    let split = s.len().checked_sub(1)?;
+    if !s.is_char_boundary(split) {
+        return None;
+    }
+    let (num, unit) = s.split_at(split);
+    if num.is_empty() {
+        return None;
+    }
+    let n: i64 = num.parse().ok()?;
+    if n < 0 {
+        return None;
+    }
+    let per_unit: i64 = match unit {
+        "h" | "H" => 3600,
+        "d" | "D" => 86_400,
+        "w" | "W" => 604_800,
+        "m" | "M" => 2_592_000, // 30-day month
+        _ => return None,
+    };
+    n.checked_mul(per_unit)
 }

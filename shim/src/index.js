@@ -166,6 +166,10 @@ async function main() {
       for (const message of result.messages ?? []) {
         rows.push({ kind: 'send_message', content: JSON.stringify(message) });
       }
+      // Per-turn inference usage/cost (host records it, attributed to this agent).
+      if (result.usage) {
+        rows.push({ kind: 'usage', content: JSON.stringify(result.usage) });
+      }
       if (result.text && result.text.length > 0) {
         rows.push({ kind: 'text', content: result.text });
       }

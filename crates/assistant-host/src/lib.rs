@@ -35,6 +35,7 @@ pub mod setup_steps;
 #[cfg(feature = "socket-mode")]
 mod signal;
 pub mod slack;
+pub mod usage;
 pub mod web;
 
 pub use admin::{
@@ -230,6 +231,141 @@ pub struct SlackRunOptions {
     /// Product-level recurring tasks to register at startup. Combined with any
     /// tasks declared on registered specialists. Empty disables product-level tasks.
     pub standing_tasks: Vec<StandingTask>,
+}
+
+/// Product-supplied inputs for a `report-usage` CLI invocation. Resolves the same
+/// instance layout as the serve path, then rolls up the central-DB `agent_usage`
+/// table for the chosen time bucket.
+pub struct ReportUsageOptions {
+    pub namespace: String,
+    pub instance: Option<String>,
+    pub home: Option<PathBuf>,
+    /// Only include usage recorded at/after this Unix second. `None` = all time.
+    pub since_epoch: Option<i64>,
+    pub bucket: crate::usage::Bucket,
+}
+
+/// Print a rolled-up usage report to stdout, returning a process exit code
+/// (0 clean, 1 on error). Resolves the instance layout exactly like the serve
+/// path, opens the central DB, and formats [`crate::usage::report`]'s rows into a
+/// monospace-aligned table with a TOTAL line.
+pub fn run_report_usage(opts: ReportUsageOptions) -> i32 {
+    match run_report_usage_inner(opts) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("report-usage error: {e}");
+            1
+        }
+    }
+}
+
+fn run_report_usage_inner(opts: ReportUsageOptions) -> Result<(), HostError> {
+    let home = opts
+        .home
+        .clone()
+        .or_else(home_dir)
+        .ok_or_else(|| HostError::Layout("HOME is not set; pass --home <path>".to_string()))?;
+    let instance_layout = InstanceLayout::derive(&home, &opts.namespace, opts.instance.as_deref())
+        .map_err(|e| HostError::Layout(e.to_string()))?;
+    let conn = assistant_db::open_central(&instance_layout.central_db_path())
+        .map_err(|e| HostError::Db(e.to_string()))?;
+    let rows = crate::usage::report(&conn, opts.since_epoch, opts.bucket)
+        .map_err(HostError::Db)?;
+    print_usage_table(&rows, opts.since_epoch);
+    Ok(())
+}
+
+/// Format usage rows (already sorted oldest-bucket-first, cost-desc within a
+/// bucket) into a monospace-aligned table with a trailing TOTAL line. Empty input
+/// prints a friendly "no usage recorded" line noting the window when one was set.
+fn print_usage_table(rows: &[crate::usage::UsageReportRow], since_epoch: Option<i64>) {
+    if rows.is_empty() {
+        match since_epoch {
+            Some(since) => println!("no usage recorded since {since} (unix epoch)"),
+            None => println!("no usage recorded"),
+        }
+        return;
+    }
+
+    // Column widths sized to the header and the widest rendered cell so numbers
+    // stay right-aligned and readable regardless of magnitude.
+    let sep = |n: i64| -> String {
+        let s = n.abs().to_string();
+        let bytes = s.as_bytes();
+        let mut out = String::new();
+        for (idx, b) in bytes.iter().enumerate() {
+            if idx > 0 && (bytes.len() - idx) % 3 == 0 {
+                out.push(',');
+            }
+            out.push(*b as char);
+        }
+        if n < 0 {
+            format!("-{out}")
+        } else {
+            out
+        }
+    };
+
+    let mut turns_t = 0i64;
+    let mut in_t = 0i64;
+    let mut out_t = 0i64;
+    let mut cr_t = 0i64;
+    let mut cw_t = 0i64;
+    let mut cost_t = 0.0f64;
+    for r in rows {
+        turns_t += r.turns;
+        in_t += r.input_tokens;
+        out_t += r.output_tokens;
+        cr_t += r.cache_read_tokens;
+        cw_t += r.cache_creation_tokens;
+        cost_t += r.cost_usd;
+    }
+
+    let cost_str = |c: f64| format!("${c:.4}");
+
+    // Measure every column against its header and the widest value (including the
+    // TOTAL row) so alignment holds.
+    let mut w_bucket = "BUCKET".len();
+    let mut w_agent = "AGENT".len();
+    let mut w_turns = "TURNS".len().max(sep(turns_t).len());
+    let mut w_in = "INPUT".len().max(sep(in_t).len());
+    let mut w_out = "OUTPUT".len().max(sep(out_t).len());
+    let mut w_cr = "CACHE_R".len().max(sep(cr_t).len());
+    let mut w_cw = "CACHE_W".len().max(sep(cw_t).len());
+    let mut w_cost = "COST".len().max(cost_str(cost_t).len());
+    for r in rows {
+        w_bucket = w_bucket.max(r.bucket.len());
+        w_agent = w_agent.max(r.agent.len());
+        w_turns = w_turns.max(sep(r.turns).len());
+        w_in = w_in.max(sep(r.input_tokens).len());
+        w_out = w_out.max(sep(r.output_tokens).len());
+        w_cr = w_cr.max(sep(r.cache_read_tokens).len());
+        w_cw = w_cw.max(sep(r.cache_creation_tokens).len());
+        w_cost = w_cost.max(cost_str(r.cost_usd).len());
+    }
+    let w_total_label = w_bucket + 2 + w_agent;
+
+    println!(
+        "{:<wb$}  {:<wa$}  {:>wt$}  {:>wi$}  {:>wo$}  {:>wcr$}  {:>wcw$}  {:>wc$}",
+        "BUCKET", "AGENT", "TURNS", "INPUT", "OUTPUT", "CACHE_R", "CACHE_W", "COST",
+        wb = w_bucket, wa = w_agent, wt = w_turns, wi = w_in, wo = w_out,
+        wcr = w_cr, wcw = w_cw, wc = w_cost,
+    );
+    for r in rows {
+        println!(
+            "{:<wb$}  {:<wa$}  {:>wt$}  {:>wi$}  {:>wo$}  {:>wcr$}  {:>wcw$}  {:>wc$}",
+            r.bucket, r.agent, sep(r.turns), sep(r.input_tokens), sep(r.output_tokens),
+            sep(r.cache_read_tokens), sep(r.cache_creation_tokens), cost_str(r.cost_usd),
+            wb = w_bucket, wa = w_agent, wt = w_turns, wi = w_in, wo = w_out,
+            wcr = w_cr, wcw = w_cw, wc = w_cost,
+        );
+    }
+    println!(
+        "{:<wl$}  {:>wt$}  {:>wi$}  {:>wo$}  {:>wcr$}  {:>wcw$}  {:>wc$}",
+        "TOTAL", sep(turns_t), sep(in_t), sep(out_t), sep(cr_t), sep(cw_t), cost_str(cost_t),
+        wl = w_total_label, wt = w_turns, wi = w_in, wo = w_out,
+        wcr = w_cr, wcw = w_cw, wc = w_cost,
+    );
 }
 
 /// Serve Slack turns over Socket Mode until the process is signalled, returning a

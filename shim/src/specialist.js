@@ -33,7 +33,7 @@ import { readFileSync } from 'node:fs';
 
 import { query, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 
-import { buildAssistantTools } from './assistant-tools.js';
+import { buildAssistantTools, usageFromResult } from './assistant-tools.js';
 
 
 // Parse a JSON array of strings from an env var, tolerating absence and malformed
@@ -192,6 +192,7 @@ export async function runSpecialistTurn(goal, memory, history) {
   // result); join distinct messages with a paragraph break so the seam keeps a
   // space. Tool-use/tool-result output is not assistant text and is skipped.
   const segments = [];
+  let usage = null;
   for await (const message of q) {
     if (message.type === 'assistant') {
       let segment = '';
@@ -199,6 +200,8 @@ export async function runSpecialistTurn(goal, memory, history) {
         if (block.type === 'text') segment += block.text;
       }
       if (segment.trim().length > 0) segments.push(segment.trim());
+    } else if (message.type === 'result') {
+      usage = usageFromResult(message);
     }
   }
   return {
@@ -209,5 +212,6 @@ export async function runSpecialistTurn(goal, memory, history) {
     resumes: buffers.resumes,
     memories: buffers.memories,
     messages: buffers.messages,
+    usage,
   };
 }

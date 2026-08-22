@@ -22,7 +22,7 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
-import { buildAssistantTools } from './assistant-tools.js';
+import { buildAssistantTools, usageFromResult } from './assistant-tools.js';
 
 // Parse the host-supplied specialist menu from ASSISTANT_SPECIALISTS: a JSON array of
 // `{ name, description }` entries (the projection of the registered
@@ -205,6 +205,7 @@ export async function runClaudeTurn(userText, memory, messages) {
   // join messages with a paragraph break (concatenating them directly would run
   // sentences together, dropping the space at the seam).
   const segments = [];
+  let usage = null;
   for await (const message of q) {
     if (message.type === 'assistant') {
       let segment = '';
@@ -212,6 +213,8 @@ export async function runClaudeTurn(userText, memory, messages) {
         if (block.type === 'text') segment += block.text;
       }
       if (segment.trim().length > 0) segments.push(segment.trim());
+    } else if (message.type === 'result') {
+      usage = usageFromResult(message);
     }
   }
   return {
@@ -222,5 +225,6 @@ export async function runClaudeTurn(userText, memory, messages) {
     resumes,
     memories,
     messages: outboundMessages,
+    usage,
   };
 }

@@ -44,6 +44,7 @@ fn domain_migrations() -> MigrationSet {
         assistant_scheduler::MODULE_ID.to_string(),
         assistant_memory::MODULE_ID.to_string(),
         assistant_agent_graph::MODULE_ID.to_string(),
+        crate::usage::MODULE_ID.to_string(),
     ]);
     let v2s: Vec<Migration> = assistant_router::migrations()
         .into_iter()
@@ -51,6 +52,7 @@ fn domain_migrations() -> MigrationSet {
         .chain(assistant_scheduler::migrations())
         .chain(assistant_memory::migrations())
         .chain(assistant_agent_graph::store::migrations())
+        .chain(crate::usage::migrations())
         .collect();
     for migration in v2s {
         set.add(migration);

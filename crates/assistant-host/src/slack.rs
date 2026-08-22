@@ -426,6 +426,14 @@ fn handle_event<A, R, F>(
             }
         }
     };
+    // Inbound channel turns run as the orchestrator.
+    record_turn_usage(
+        conn,
+        ORCHESTRATOR_DESTINATION,
+        &opts.config.onecli_agent,
+        &event.chat_id,
+        &replies,
+    );
     let target = DeliveryTarget {
         chat_id: event.chat_id.clone(),
         thread_root_id: Some(thread_root),
@@ -761,6 +769,13 @@ fn finalize_scheduled_turn<A, R, F>(
     };
     let run_as = item.run_as.as_deref();
     let run_as_spec = run_as.and_then(|route| opts.specialists.iter().find(|s| s.route_name == route));
+    // Attribute usage to the run_as agent, or the orchestrator for a plain
+    // scheduled turn (run_as None).
+    let (usage_agent, usage_onecli) = match run_as_spec {
+        Some(spec) => (spec.route_name.as_str(), spec.onecli_agent.as_str()),
+        None => (ORCHESTRATOR_DESTINATION, opts.config.onecli_agent.as_str()),
+    };
+    record_turn_usage(conn, usage_agent, usage_onecli, &session_id, replies);
     let target = DeliveryTarget {
         chat_id: session_id.clone(),
         thread_root_id: None,
@@ -1050,8 +1065,35 @@ fn deliver_reply<A>(
         );
         return;
     }
+    if reply.kind == "usage" {
+        // Per-turn inference usage/cost is recorded to `agent_usage` by the turn
+        // site (`record_turn_usage`), attributed to the agent; never posted.
+        return;
+    }
     if let Err(err) = channel.deliver(target, &to_content(reply)) {
         eprintln!("slack: delivery failed for channel {session_id}: {err}");
+    }
+}
+
+/// Record any per-turn inference-usage rows in `replies` to `agent_usage`,
+/// attributed to the agent that produced them (`agent` route name +
+/// `onecli_agent` credential identity + `session_id`). Best-effort: a failure is
+/// logged, never propagated — usage accounting must not fail a turn.
+fn record_turn_usage(
+    conn: &Connection,
+    agent: &str,
+    onecli_agent: &str,
+    session_id: &str,
+    replies: &[OutboundMessage],
+) {
+    for reply in replies {
+        if reply.kind == "usage" {
+            if let Err(err) =
+                crate::usage::record(conn, agent, onecli_agent, session_id, &reply.content)
+            {
+                eprintln!("slack: recording usage for {agent} in {session_id} failed: {err}");
+            }
+        }
     }
 }
 
@@ -1138,6 +1180,8 @@ fn route_send_message<A, R, F>(
                 }
             }
         };
+        // The relay turn runs as the orchestrator.
+        record_turn_usage(conn, ORCHESTRATOR_DESTINATION, &opts.config.onecli_agent, &relay, &replies);
         // The orchestrator decides the outcome. Its `send_message` to a channel id
         // posts; its `schedule_message` queues follow-up; plain text in a relay
         // session has no channel and is intentionally not surfaced.
@@ -1199,6 +1243,8 @@ fn route_send_message<A, R, F>(
                 return;
             }
         };
+        // The a2a turn ran as this specialist.
+        record_turn_usage(conn, &spec.route_name, &spec.onecli_agent, &a2a_session, &replies);
         for reply in &replies {
             match reply.kind.as_str() {
                 "schedule_message" => {
